@@ -1,0 +1,6 @@
+# package-win10.bat 必须保持 GBK + CRLF（cmd.exe 对含中文批处理的解析要求），
+# git 不要对其做换行转换或编码处理，否则脚本会解析错乱
+scripts/package-win10.bat -text
+
+# 其余文本文件按默认处理
+* text=auto
