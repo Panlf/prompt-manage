@@ -1,4 +1,4 @@
-import { state, setRenderFn, navigate, loadAll, setMainContent, escapeHtml, type ViewName, windowMinimize, windowMaximize, windowClose, windowIsMaximized, windowGetPosition, windowSetPosition } from "./core";
+import { state, setRenderFn, navigate, loadAll, setMainContent, escapeHtml, type ViewName, windowMinimize, windowSetMaximized, windowSyncInputRegion, windowClose, windowGetPosition, windowSetPosition, getUiPref, setUiPref } from "./core";
 import { renderDashboard } from "./dashboard";
 import { renderScenarios } from "./scenarios";
 import { renderScenarioDetail, renderPromptDetail } from "./prompts";
@@ -14,8 +14,11 @@ function initWindowControls() {
 	const titleBar = document.getElementById("title-bar");
 	const dragArea = titleBar?.querySelector(".title-bar-drag") as HTMLElement | null;
 
-	const updateMaximizeIcon = async () => {
-		const isMax = await windowIsMaximized();
+	// 最大化状态以视口尺寸实时推断（最大化 = 视口铺满屏幕工作区）。
+	// 不依赖后端状态：按钮、双击标题栏、系统贴靠/Win+方向键触发的最大化都能被感知，
+	// 避免状态标记与真实窗口状态脱节导致按钮失灵
+	let maximized = false;
+	const setMaxIcon = (isMax: boolean) => {
 		const iconMax = btnMax?.querySelector(".icon-maximize") as HTMLElement | null;
 		const iconRestore = btnMax?.querySelector(".icon-restore") as HTMLElement | null;
 		if (iconMax && iconRestore) {
@@ -23,21 +26,28 @@ function initWindowControls() {
 			iconRestore.style.display = isMax ? "block" : "none";
 		}
 	};
+	const refreshMaxState = () => {
+		maximized = window.innerWidth >= screen.availWidth && window.innerHeight >= screen.availHeight;
+		setMaxIcon(maximized);
+	};
+	window.addEventListener("resize", refreshMaxState);
+	refreshMaxState();
+
+	const toggleMaximize = async () => {
+		maximized = !maximized;
+		setMaxIcon(maximized); // resize 事件到达前先乐观更新图标，避免连点竞态
+		await windowSetMaximized(maximized);
+	};
 
 	btnMin?.addEventListener("click", () => windowMinimize());
-	btnMax?.addEventListener("click", async () => {
-		await windowMaximize();
-		updateMaximizeIcon();
-	});
+	btnMax?.addEventListener("click", toggleMaximize);
 	btnClose?.addEventListener("click", () => windowClose());
 
 	titleBar?.addEventListener("dblclick", async (e) => {
 		if ((e.target as HTMLElement).closest(".window-btn")) return;
-		await windowMaximize();
-		updateMaximizeIcon();
+		if ((e.target as HTMLElement).closest("#theme-picker")) return;
+		await toggleMaximize();
 	});
-
-	updateMaximizeIcon();
 
 	// ---- Manual pointer-based drag (works with native + CEF renderer) ----
 	if (dragArea) {
@@ -55,7 +65,7 @@ function initWindowControls() {
 			if (e.button !== 0) return; // only left mouse button
 			if ((e.target as HTMLElement).closest(".window-btn")) return;
 			// Don't drag if window is maximized
-			if (await windowIsMaximized()) return;
+			if (maximized) return;
 
 			const pos = await windowGetPosition();
 			dragState = {
@@ -109,6 +119,60 @@ function initWindowControls() {
 			}
 		}, true);
 	}
+}
+
+// ---- Theme picker (页面配色) ----
+const THEME_KEY = "theme";
+
+function applyTheme(theme: string) {
+	if (theme) document.documentElement.dataset["theme"] = theme;
+	else delete document.documentElement.dataset["theme"];
+	document.querySelectorAll<HTMLButtonElement>(".theme-option").forEach((opt) => {
+		opt.classList.toggle("active", (opt.dataset["themeValue"] ?? "") === theme);
+	});
+}
+
+async function initTheme() {
+	try {
+		const saved = await getUiPref(THEME_KEY);
+		if (saved) applyTheme(saved);
+	} catch {
+		// 读取失败按默认配色显示
+	}
+}
+
+function initThemePicker() {
+	const picker = document.getElementById("theme-picker");
+	const btn = document.getElementById("btn-theme");
+	const menu = document.getElementById("theme-menu");
+	if (!picker || !btn || !menu) return;
+
+	btn.addEventListener("click", () => {
+		menu.hidden = !menu.hidden;
+	});
+
+	menu.querySelectorAll<HTMLButtonElement>(".theme-option").forEach((opt) => {
+		opt.addEventListener("click", async () => {
+			const theme = opt.dataset["themeValue"] ?? "";
+			applyTheme(theme);
+			menu.hidden = true;
+			try {
+				await setUiPref(THEME_KEY, theme); // 存库，重启后保持
+			} catch {
+				// 保存失败时本次会话仍生效
+			}
+		});
+	});
+
+	// 点击选择器外部时收起菜单
+	document.addEventListener("click", (e) => {
+		if (!menu.hidden && !(e.target as HTMLElement).closest("#theme-picker")) {
+			menu.hidden = true;
+		}
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && !menu.hidden) menu.hidden = true;
+	});
 }
 
 function initSidebar() {
@@ -252,8 +316,15 @@ function renderWithTransition() {
 
 // ---- Init ----
 initWindowControls();
+initThemePicker();
 initSidebar();
 initCommandPalette();
+initTheme(); // 尽早恢复上次选择的配色（不阻塞首屏渲染）
 setRenderFn(renderWithTransition);
 setMainContent('<div class="empty-state">加载中...</div>');
-loadAll().then(() => render());
+loadAll().then(() => {
+	// 启动即同步一次输入区域：窗口若以上次的最大化尺寸直接创建，
+	// 输入命中区域可能停留在初始配置尺寸（旧区域之外点击穿透）
+	windowSyncInputRegion().catch(() => {});
+	render();
+});

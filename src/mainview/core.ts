@@ -60,11 +60,15 @@ type AppRPC = {
 
 			// Window controls
 			windowMinimize: { params: {}; response: void };
-			windowMaximize: { params: {}; response: void };
+			windowSetMaximized: { params: { maximized: boolean }; response: void };
+			windowSyncInputRegion: { params: {}; response: void };
 			windowClose: { params: {}; response: void };
-			windowIsMaximized: { params: {}; response: boolean };
 			windowGetPosition: { params: {}; response: { x: number; y: number } };
 			windowSetPosition: { params: { x: number; y: number }; response: void };
+
+			// UI prefs（界面偏好，如主题色）
+			getUiPref: { params: { key: string }; response: string | null };
+			setUiPref: { params: { key: string; value: string }; response: void };
 		};
 		messages: {};
 	};
@@ -377,16 +381,16 @@ export async function windowMinimize() {
 	await electrobun.rpc!.request.windowMinimize({});
 }
 
-export async function windowMaximize() {
-	await electrobun.rpc!.request.windowMaximize({});
+export async function windowSetMaximized(maximized: boolean) {
+	await electrobun.rpc!.request.windowSetMaximized({ maximized });
+}
+
+export async function windowSyncInputRegion() {
+	await electrobun.rpc!.request.windowSyncInputRegion({});
 }
 
 export async function windowClose() {
 	await electrobun.rpc!.request.windowClose({});
-}
-
-export async function windowIsMaximized(): Promise<boolean> {
-	return await electrobun.rpc!.request.windowIsMaximized({});
 }
 
 export async function windowGetPosition(): Promise<{ x: number; y: number }> {
@@ -395,4 +399,14 @@ export async function windowGetPosition(): Promise<{ x: number; y: number }> {
 
 export async function windowSetPosition(x: number, y: number) {
 	await electrobun.rpc!.request.windowSetPosition({ x, y });
+}
+
+// ---- UI prefs ----
+
+export async function getUiPref(key: string): Promise<string | null> {
+	return await electrobun.rpc!.request.getUiPref({ key });
+}
+
+export async function setUiPref(key: string, value: string): Promise<void> {
+	await electrobun.rpc!.request.setUiPref({ key, value });
 }

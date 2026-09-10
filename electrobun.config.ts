@@ -2,7 +2,7 @@ import type { ElectrobunConfig } from "electrobun";
 
 export default {
 	app: {
-		name: "prompt-manage",
+		name: "PromptHub",
 		identifier: "promptmanage.app",
 		version: "1.0.0",
 	},

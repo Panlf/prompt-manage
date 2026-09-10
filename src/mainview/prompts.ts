@@ -507,17 +507,26 @@ function showPromptModal(scenario: Scenario) {
 						<label>生成说明</label>
 						<input type="text" id="pm-desc" value="${escapeHtml(draft?.aiDesc ?? "")}" placeholder="描述你想要的提示词，例如：写一个产品文案的提示词" />
 					</div>
+					${
+						state.llmConfigs.length > 0
+							? `
 					<div class="form-group form-group-inline">
 						<label>模型</label>
 						<select id="pm-llm">
 							${state.llmConfigs.map((c) => `<option value="${c.id}"${c.is_active ? " selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
 						</select>
 					</div>
-					<button class="btn-secondary" id="pm-generate" ${state.llmConfigs.length === 0 ? "disabled" : ""}>AI生成</button>
+					`
+							: ""
+					}
+					<div class="form-group ai-generate-cell">
+						<label aria-hidden="true">&nbsp;</label>
+						<button class="btn-secondary" id="pm-generate" ${state.llmConfigs.length === 0 ? "disabled" : ""}>AI生成</button>
+					</div>
 				</div>
 				${state.llmConfigs.length === 0 ? '<p class="empty-state-small">请先在模型设置中配置大模型</p>' : ""}
 			</div>
-			<p class="form-hint">误触关闭不会丢失已填内容，重新打开即可继续；切换页面才会清空草稿。</p>
+			<p class="form-hint">已填写的内容会自动保留，重新打开即可继续填写。</p>
 			<div class="modal-actions">
 				<button class="btn-secondary" id="pm-cancel">取消</button>
 				<button class="btn-primary" id="pm-save">创建</button>

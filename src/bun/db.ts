@@ -156,6 +156,11 @@ db.exec(`
 		is_active INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
+
+	CREATE TABLE IF NOT EXISTS app_prefs (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);
 `);
 
 // ---- Lightweight column migration (v1.x -> v2.0) ----
@@ -550,18 +555,21 @@ export function getFavoritePrompts(): PromptWithScenario[] {
 	return rows.map((r) => ({ ...r, tags: tags.get(r.id) ?? [] }));
 }
 
-const SORT_ORDER_SQL: Record<PromptSort, string> = {
-	// 未使用（last_used_at 为空）置底，已使用的按最近使用时间倒序
-	recent: "(p.last_used_at IS NULL) ASC, p.last_used_at DESC, p.updated_at DESC",
-	most_used: "p.use_count DESC, p.updated_at DESC",
-	updated: "p.updated_at DESC",
+// 全部提示词页三个 Tab 的取数规则：每个 Tab 固定只取前 6 条；
+// 最近使用/最常用只统计复制过的提示词，没复制过的不进入这两个 Tab
+const SORT_RULES: Record<PromptSort, { where?: string; order: string }> = {
+	recent: { where: "p.last_used_at IS NOT NULL", order: "p.last_used_at DESC, p.updated_at DESC" },
+	most_used: { where: "p.use_count > 0", order: "p.use_count DESC, p.last_used_at DESC, p.updated_at DESC" },
+	updated: { order: "p.updated_at DESC" },
 };
 
 export function getAllPrompts(
 	sort: PromptSort,
 	opts?: { favorite?: boolean; source?: string; tag?: string },
 ): PromptWithScenario[] {
+	const rules = SORT_RULES[sort] ?? SORT_RULES.updated;
 	const conditions = ["p.deleted_at IS NULL"];
+	if (rules.where) conditions.push(rules.where);
 	const params: any[] = [];
 	if (opts?.favorite) {
 		conditions.push("p.is_favorite = 1");
@@ -583,7 +591,8 @@ export function getAllPrompts(
 		SELECT p.*, s.name as scenario_name
 		FROM prompts p JOIN scenarios s ON s.id = p.scenario_id
 		WHERE ${conditions.join(" AND ")}
-		ORDER BY ${SORT_ORDER_SQL[sort] ?? SORT_ORDER_SQL["updated"]}
+		ORDER BY ${rules.order}
+		LIMIT 6
 	`;
 	const rows = db.prepare(sql).all(...params) as any[];
 	const tags = loadPromptTags(rows.map((r) => r.id));
@@ -721,6 +730,19 @@ export function setActiveLLMConfig(id: number): void {
 		db.prepare("UPDATE llm_configs SET is_active = 0").run();
 		db.prepare("UPDATE llm_configs SET is_active = 1 WHERE id = ?").run(id);
 	})();
+}
+
+// ---- UI prefs（主题色等界面偏好，存库以便重启后保留） ----
+
+export function getPref(key: string): string | null {
+	const row = db.prepare("SELECT value FROM app_prefs WHERE key = ?").get(key) as any;
+	return row?.value ?? null;
+}
+
+export function setPref(key: string, value: string): void {
+	db.prepare(
+		"INSERT INTO app_prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+	).run(key, value);
 }
 
 // ---- Export / Import ----

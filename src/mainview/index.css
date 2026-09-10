@@ -136,6 +136,136 @@
 	}
 }
 
+/* ---------- 页面配色主题（标题栏调色按钮切换，选择存库，重启保留） ---------- */
+/* 各主题完整声明所需变量，选择器优先级高于上方深色模式媒体查询，
+   浅色主题在系统深色模式下也不会串色 */
+
+/* 浅色主题共享锚定：强调色/状态色/阴影固定为浅色值 */
+:root[data-theme="sky"],
+:root[data-theme="green"],
+:root[data-theme="orange"] {
+	color-scheme: light;
+	--accent: #0071e3;
+	--accent-hover: #0077ed;
+	--accent-active: #006edb;
+	--accent-soft: rgba(0, 113, 227, 0.1);
+	--text-on-accent: #ffffff;
+	--text-inverse: #f5f5f7;
+	--success: #34c759;
+	--success-soft: rgba(52, 199, 89, 0.12);
+	--warning: #ff9f0a;
+	--danger: #ff3b30;
+	--danger-hover: #ff453a;
+	--danger-soft: rgba(255, 59, 48, 0.1);
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.06);
+	--shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.04);
+	--shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.1), 0 4px 12px rgba(0, 0, 0, 0.06);
+	--shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+	--shadow-elevated: 0 8px 28px rgba(0, 0, 0, 0.12);
+}
+
+/* 天蓝 */
+:root[data-theme="sky"] {
+	--bg-window: #edf4fb;
+	--bg-primary: #f5f9fd;
+	--bg-secondary: #e7f0f9;
+	--bg-tertiary: #f0f6fb;
+	--bg-elevated: #f8fbfe;
+	--bg-sidebar: rgba(231, 240, 249, 0.85);
+	--bg-titlebar: rgba(235, 243, 250, 0.92);
+	--bg-hover: rgba(30, 80, 140, 0.06);
+	--bg-active: rgba(0, 113, 227, 0.09);
+	--bg-overlay: rgba(15, 40, 70, 0.28);
+	--text-primary: #1c2a3a;
+	--text-secondary: #5f7186;
+	--text-tertiary: #93a5b8;
+	--border: rgba(28, 60, 100, 0.1);
+	--border-strong: rgba(28, 60, 100, 0.16);
+	--border-soft: rgba(28, 60, 100, 0.05);
+	--divider: rgba(28, 60, 100, 0.08);
+}
+
+/* 淡绿 */
+:root[data-theme="green"] {
+	--bg-window: #eef5ee;
+	--bg-primary: #f5faf5;
+	--bg-secondary: #e5f1e6;
+	--bg-tertiary: #eff7ef;
+	--bg-elevated: #f8fcf8;
+	--bg-sidebar: rgba(229, 241, 230, 0.85);
+	--bg-titlebar: rgba(234, 243, 235, 0.92);
+	--bg-hover: rgba(30, 90, 40, 0.06);
+	--bg-active: rgba(52, 150, 70, 0.1);
+	--bg-overlay: rgba(20, 50, 25, 0.28);
+	--text-primary: #1e2f22;
+	--text-secondary: #5f7566;
+	--text-tertiary: #93a899;
+	--border: rgba(30, 80, 40, 0.1);
+	--border-strong: rgba(30, 80, 40, 0.16);
+	--border-soft: rgba(30, 80, 40, 0.05);
+	--divider: rgba(30, 80, 40, 0.08);
+}
+
+/* 淡橘 */
+:root[data-theme="orange"] {
+	--bg-window: #f9f2e9;
+	--bg-primary: #fdf8f1;
+	--bg-secondary: #f3e8d9;
+	--bg-tertiary: #f9f1e6;
+	--bg-elevated: #fefaf4;
+	--bg-sidebar: rgba(243, 232, 217, 0.85);
+	--bg-titlebar: rgba(247, 238, 226, 0.92);
+	--bg-hover: rgba(120, 70, 10, 0.06);
+	--bg-active: rgba(220, 130, 30, 0.1);
+	--bg-overlay: rgba(60, 35, 10, 0.26);
+	--text-primary: #332a1e;
+	--text-secondary: #7a6b56;
+	--text-tertiary: #a89a86;
+	--border: rgba(100, 70, 30, 0.1);
+	--border-strong: rgba(100, 70, 30, 0.16);
+	--border-soft: rgba(100, 70, 30, 0.05);
+	--divider: rgba(100, 70, 30, 0.08);
+}
+
+/* 紫黑（深色） */
+:root[data-theme="purple"] {
+	color-scheme: dark;
+	--bg-window: #131017;
+	--bg-primary: #1a1620;
+	--bg-secondary: #251f2e;
+	--bg-tertiary: #1f1a26;
+	--bg-elevated: #251f2e;
+	--bg-sidebar: rgba(26, 22, 32, 0.85);
+	--bg-titlebar: rgba(26, 22, 32, 0.92);
+	--bg-hover: rgba(255, 255, 255, 0.06);
+	--bg-active: rgba(150, 125, 255, 0.14);
+	--bg-overlay: rgba(0, 0, 0, 0.55);
+	--text-primary: #efeaf5;
+	--text-secondary: #a89cb8;
+	--text-tertiary: #6f6480;
+	--text-on-accent: #ffffff;
+	--text-inverse: #f5f5f7;
+	--accent: #8b7ae8;
+	--accent-hover: #9a8bf0;
+	--accent-active: #7c6ade;
+	--accent-soft: rgba(139, 122, 232, 0.16);
+	--success: #30d158;
+	--success-soft: rgba(48, 209, 88, 0.16);
+	--warning: #ff9f0a;
+	--danger: #ff453a;
+	--danger-hover: #ff6359;
+	--danger-soft: rgba(255, 69, 58, 0.16);
+	--border: rgba(255, 255, 255, 0.1);
+	--border-strong: rgba(255, 255, 255, 0.16);
+	--border-soft: rgba(255, 255, 255, 0.05);
+	--divider: rgba(255, 255, 255, 0.08);
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+	--shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+	--shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+	--shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+	--shadow-elevated: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
 /* ---------- Reset ---------- */
 *,
 *::before,
@@ -279,6 +409,60 @@ h4 {
 .btn-close:hover {
 	background: var(--danger);
 	color: #fff;
+}
+
+/* ---------- Theme Picker ---------- */
+.theme-picker {
+	position: relative;
+}
+
+.theme-menu {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	z-index: 90;
+	min-width: 132px;
+	padding: 6px;
+	background: var(--bg-elevated);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-elevated);
+}
+
+.theme-menu-title {
+	font: var(--text-caption);
+	color: var(--text-tertiary);
+	padding: 4px 8px 6px;
+}
+
+.theme-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 6px 8px;
+	border-radius: var(--radius-xs);
+	font: var(--text-callout);
+	color: var(--text-primary);
+	text-align: left;
+}
+
+.theme-option:hover {
+	background: var(--bg-hover);
+}
+
+.theme-option.active {
+	background: var(--bg-active);
+	color: var(--accent);
+	font-weight: 500;
+}
+
+.theme-swatch {
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	border: 1px solid var(--border-strong);
+	flex-shrink: 0;
 }
 
 /* ---------- App Body ---------- */
@@ -1401,12 +1585,27 @@ select option {
 
 .ai-section .form-row {
 	gap: 10px;
+	margin-bottom: 16px;
 }
 
-.ai-section .form-row > button {
-	flex-shrink: 0;
-	align-self: flex-end;
+/* 行内字段去掉自带的下边距，行间距交给行本身控制 */
+.ai-section .form-row .form-group {
 	margin-bottom: 0;
+}
+
+/* AI生成按钮：单元格撑满整行高度，隐形标签占住标签行的位置，
+   按钮在剩余空间（正好是输入框的垂直区间）内拉伸到等高，实现垂直居中对齐；
+   宽度按内容自适应，不与输入框抢占行宽 */
+.ai-section .ai-generate-cell {
+	flex: 0 0 auto;
+	align-self: stretch;
+	display: flex;
+	flex-direction: column;
+}
+
+.ai-section .ai-generate-cell > button {
+	flex: 1;
+	min-width: 96px;
 }
 
 /* ---------- Modal ---------- */

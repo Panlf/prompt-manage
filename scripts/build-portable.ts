@@ -37,17 +37,19 @@ const rcedit = join(root, "node_modules", "rcedit", "bin", "rcedit-x64.exe");
 const icon = join(root, "resources", "app-icon.ico");
 const zigZstd = join(root, "node_modules", "electrobun", "dist-win-x64", "zig-zstd.exe");
 const buildDir = join(root, "build", "stable-win-x64");
-const appSourceDir = join(buildDir, "prompt-manage");
+const appSourceDir = join(buildDir, "PromptHub");
 const resourcesDir = join(appSourceDir, "Resources");
 
 // 临时工作目录
 const workDir = join(buildDir, "_portable_work");
-const extractedDir = join(workDir, "prompt-manage");
+const extractedDir = join(workDir, "PromptHub");
 const tarPath = join(workDir, "app.tar");
 
 // 输出（用户可见名称统一为 PromptHub）
-const portableDir = join(buildDir, "PromptHub");
-const portableZip = join(buildDir, "PromptHub.zip");
+// 注意：electrobun 构建中间目录也叫 PromptHub（build/stable-win-x64/PromptHub），
+// 绿色版最终产物放在上一级 build/ 下避免同名冲突
+const portableDir = join(root, "build", "PromptHub");
+const portableZip = join(root, "build", "PromptHub.zip");
 
 // 主程序名（更专业的命名，替代默认的 launcher.exe）
 const appExeName = "PromptHub.exe";
@@ -143,7 +145,7 @@ execSync(
 if (existsSync(portableZip)) {
 	const sizeMB = (statSync(portableZip).size / 1024 / 1024).toFixed(2);
 	console.log(`\nPortable zip: ${portableZip} (${sizeMB} MB)`);
-	console.log(`解压后运行: prompt-manage-portable\\bin\\${appExeName}`);
+	console.log(`解压后运行: PromptHub\\bin\\${appExeName}`);
 } else {
 	fail("Failed to create zip");
 }

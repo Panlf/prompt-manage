@@ -5,6 +5,19 @@ import * as llm from "./llm";
 
 let mainWindow: any = null;
 
+// 还原最大化时的窗口边界兜底（无边框+透明窗口在 Windows 上 unmaximize 不一定生效）
+let savedWinBounds: { x: number; y: number; width: number; height: number } | null = null;
+
+// Windows 上无边框+透明（分层）窗口 resize 后，输入命中区域可能停留在旧尺寸
+// （渲染正常，但旧区域之外鼠标点击会穿透到下层窗口）。重设一次窗口边界可强制
+// 原生层重算；注意同值重设会被跳过，必须先 ±1px 抖动产生真实 resize。
+function syncWindowInputRegion() {
+	if (!mainWindow) return;
+	const frame = mainWindow.getFrame();
+	mainWindow.setFrame(frame.x, frame.y, frame.width + 1, frame.height + 1);
+	mainWindow.setFrame(frame.x, frame.y, frame.width, frame.height);
+}
+
 type AppRPC = {
 	bun: RPCSchema<{
 		requests: {
@@ -73,11 +86,15 @@ type AppRPC = {
 
 			// Window controls
 			windowMinimize: { params: {}; response: void };
-			windowMaximize: { params: {}; response: void };
+			windowSetMaximized: { params: { maximized: boolean }; response: void };
+			windowSyncInputRegion: { params: {}; response: void };
 			windowClose: { params: {}; response: void };
-			windowIsMaximized: { params: {}; response: boolean };
 			windowGetPosition: { params: {}; response: { x: number; y: number } };
 			windowSetPosition: { params: { x: number; y: number }; response: void };
+
+			// UI prefs（界面偏好，如主题色）
+			getUiPref: { params: { key: string }; response: string | null };
+			setUiPref: { params: { key: string; value: string }; response: void };
 		};
 		messages: {};
 	}>;
@@ -305,20 +322,28 @@ const appRPC = BrowserView.defineRPC<AppRPC>({
 			windowMinimize: () => {
 				if (mainWindow) mainWindow.minimize();
 			},
-			windowMaximize: () => {
-				if (mainWindow) {
-					if (mainWindow.isMaximized()) {
-						mainWindow.unmaximize();
-					} else {
-						mainWindow.maximize();
-					}
+			// 是否最大化由前端按视口尺寸推断后传入（原生 isMaximized() 在无边框
+			// 透明窗口上不可靠，系统贴靠/Win+方向键触发的最大化后端也感知不到）
+			windowSetMaximized: ({ maximized }) => {
+				if (!mainWindow) return;
+				if (maximized) {
+					const pos = mainWindow.getPosition();
+					const size = mainWindow.getSize();
+					savedWinBounds = { x: pos.x, y: pos.y, width: size.width, height: size.height };
+					mainWindow.maximize();
+					syncWindowInputRegion();
+				} else {
+					mainWindow.unmaximize();
+					const bounds = savedWinBounds ?? { x: 0, y: 0, width: 1200, height: 800 };
+					mainWindow.setFrame(bounds.x, bounds.y, bounds.width, bounds.height);
+					savedWinBounds = null;
 				}
+			},
+			windowSyncInputRegion: () => {
+				syncWindowInputRegion();
 			},
 			windowClose: () => {
 				if (mainWindow) mainWindow.close();
-			},
-			windowIsMaximized: () => {
-				return mainWindow?.isMaximized() ?? false;
 			},
 			windowGetPosition: () => {
 				if (mainWindow) return mainWindow.getPosition();
@@ -326,6 +351,14 @@ const appRPC = BrowserView.defineRPC<AppRPC>({
 			},
 			windowSetPosition: ({ x, y }) => {
 				if (mainWindow) mainWindow.setPosition(x, y);
+			},
+
+			// ---- UI prefs ----
+			getUiPref: ({ key }) => {
+				return db.getPref(key);
+			},
+			setUiPref: ({ key, value }) => {
+				db.setPref(key, value);
 			},
 		},
 		messages: {},
@@ -343,7 +376,10 @@ mainWindow = new BrowserWindow({
 		height: 800,
 	},
 	titleBarStyle: "hidden",
-	transparent: true,
+	// 注意：transparent: true（分层窗口）在 Windows 上最大化后输入命中区域不会跟随
+	// 窗口新尺寸，旧区域之外鼠标点击会穿透到下层窗口（界面自身绘制不透明背景，
+	// 透明度无可见收益），故必须保持 false
+	transparent: false,
 	passthrough: false,
 	renderer: "native",
 	preload: null,

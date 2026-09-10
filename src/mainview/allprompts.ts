@@ -3,13 +3,13 @@ import { promptRowHtml, bindPromptRows } from "./components";
 import type { PromptWithScenario, PromptSort, Tag } from "../shared/types";
 
 const SORT_LABELS: { key: PromptSort; label: string }[] = [
+	{ key: "updated", label: "最近更新" },
 	{ key: "recent", label: "最近使用" },
 	{ key: "most_used", label: "最常用" },
-	{ key: "updated", label: "最近更新" },
 ];
 
 // Toolbar state, persisted across page entries
-let lastSort: PromptSort = "recent";
+let lastSort: PromptSort = "updated";
 let lastSource = "";
 let lastTag = "";
 let lastFavorite = false;

@@ -216,7 +216,7 @@ function showScenarioModal(scenario?: Scenario) {
 				<label>标签（逗号分隔）</label>
 				<input type="text" id="modal-tags" value="${escapeHtml(scenario ? scenario.tags.join(", ") : draft?.tags ?? "")}" placeholder="例如：写作, 营销, 文案" />
 			</div>
-			${isNew ? '<p class="form-hint">误触关闭不会丢失已填内容，重新打开即可继续；切换页面才会清空草稿。</p>' : ""}
+			${isNew ? '<p class="form-hint">已填写的内容会自动保留，重新打开即可继续填写。</p>' : ""}
 			<div class="modal-actions">
 				<button class="btn-secondary" id="modal-cancel">取消</button>
 				<button class="btn-primary" id="modal-save">${scenario ? "保存" : "创建"}</button>
