@@ -33,3 +33,6 @@ config.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 本地博客草稿（不入库）
+blog/
