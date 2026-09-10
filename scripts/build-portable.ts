@@ -104,12 +104,23 @@ if (!existsSync(launcherExe)) fail(`launcher.exe not found: ${launcherExe}`);
 if (!existsSync(bunExe)) fail(`bun.exe not found: ${bunExe}`);
 for (const exe of [launcherExe, bunExe]) {
 	const sizeBefore = statSync(exe).size;
-	try {
-		execSync(`"${rcedit}" "${exe}" --set-icon "${icon}"`, { stdio: "inherit" });
-		const sizeAfter = statSync(exe).size;
-		console.log(`Icon embedded into ${exe.includes("bun") ? "bun.exe" : "launcher.exe"}: ${sizeBefore} -> ${sizeAfter} bytes`);
-	} catch (e) {
-		console.error(`Failed to embed icon into ${exe}: ${e}`);
+	const label = exe.includes("bun") ? "bun.exe" : "launcher.exe";
+	// 刚解压的大 exe 可能被 Defender/索引器短暂锁定导致 rcedit 写入失败，重试兜底；
+	// bun.exe 图标丢失时任务栏会回退成 bun 默认图标
+	let lastErr: unknown = null;
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		try {
+			execSync(`"${rcedit}" "${exe}" --set-icon "${icon}"`, { stdio: "inherit" });
+			console.log(`Icon embedded into ${label}: ${sizeBefore} -> ${statSync(exe).size} bytes`);
+			lastErr = null;
+			break;
+		} catch (e) {
+			lastErr = e;
+			if (attempt < 3) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+		}
+	}
+	if (lastErr !== null) {
+		console.error(`Failed to embed icon into ${exe}: ${lastErr}`);
 		if (exe === launcherExe) console.log("Continuing without icon (launcher will still work).");
 		else console.log("WARNING: bun.exe keeps default icon (taskbar will show bun icon).");
 	}
