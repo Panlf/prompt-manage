@@ -1,4 +1,5 @@
 import { BrowserView, BrowserWindow, type RPCSchema } from "electrobun/bun";
+import { existsSync } from "fs";
 import type { Scenario, Tag, Prompt, PromptVersion, PrecheckRun, LLMConfig, PromptWithScenario, SearchResults, DashboardStats, PromptSort } from "../shared/types";
 import * as db from "./db";
 import * as llm from "./llm";
@@ -16,6 +17,61 @@ function syncWindowInputRegion() {
 	const frame = mainWindow.getFrame();
 	mainWindow.setFrame(frame.x, frame.y, frame.width + 1, frame.height + 1);
 	mainWindow.setFrame(frame.x, frame.y, frame.width, frame.height);
+}
+
+/**
+ * 打开原生文件夹选择对话框（Electrobun 未内置 dialog API）：
+ * Windows 用 PowerShell FolderBrowserDialog，macOS 用 osascript，Linux 尽力用 zenity。
+ * 标题/起始路径经环境变量或 argv 传入以避免转义问题；不存在的起始路径一律忽略。
+ * 返回：用户取消 → { path: null, message: "" }；失败 → 带 message 的结果。
+ */
+	async function selectFolderDialog(startDir: string, title: string): Promise<{ path: string | null; message: string }> {
+	const trimmed = startDir.trim();
+	const start = trimmed && existsSync(trimmed) ? trimmed : "";
+	try {
+		if (process.platform === "win32") {
+			const script = [
+				"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+				"Add-Type -AssemblyName System.Windows.Forms | Out-Null",
+				"$d = New-Object System.Windows.Forms.FolderBrowserDialog",
+				"$d.Description = $env:PM_PICK_TITLE",
+				"$d.UseDescriptionForTitle = $true",
+				"$d.ShowNewFolderButton = $true",
+				"if ($env:PM_PICK_START) { $d.SelectedPath = $env:PM_PICK_START }",
+				"if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }",
+			].join("; ");
+			const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command", script], {
+				env: { ...process.env, PM_PICK_TITLE: title, PM_PICK_START: start },
+				stdout: "pipe",
+				stderr: "ignore",
+				windowsHide: true,
+			});
+			const out = await new Response(proc.stdout).text();
+			await proc.exited;
+			return { path: out.trim() || null, message: "" };
+		}
+		if (process.platform === "darwin") {
+			const script = start
+				? "POSIX path of (choose folder with prompt (item 1 of argv) default location (POSIX file (item 2 of argv)))"
+				: "POSIX path of (choose folder with prompt (item 1 of argv))";
+			const proc = Bun.spawn(
+				["osascript", "-e", "on run argv", "-e", script, "-e", "end run", "--", title, ...(start ? [start] : [])],
+				{ stdout: "pipe", stderr: "ignore" },
+			);
+			const out = await new Response(proc.stdout).text();
+			await proc.exited;
+			return { path: out.trim() || null, message: "" };
+		}
+		// Linux：zenity 非系统自带组件，尽力而为
+		const args = ["--file-selection", "--directory", `--title=${title}`, ...(start ? [`--filename=${start}/`] : [])];
+		const proc = Bun.spawn(["zenity", ...args], { stdout: "pipe", stderr: "ignore" });
+		const out = await new Response(proc.stdout).text();
+		await proc.exited;
+		return { path: out.trim() || null, message: "" };
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { path: null, message: `无法打开文件夹选择器：${msg}` };
+	}
 }
 
 type AppRPC = {
@@ -83,6 +139,7 @@ type AppRPC = {
 			getDataPath: { params: {}; response: { current: string; default: string; custom: string | null; dbPath: string; configSource: string; portableConfigPath: string } };
 			migrateData: { params: { newPath: string }; response: { success: boolean; newPath: string; message: string } };
 			validateDataDir: { params: { path: string }; response: { ok: boolean; message: string } };
+			selectFolder: { params: { startPath?: string }; response: { path: string | null; message: string } };
 
 			// Window controls
 			windowMinimize: { params: {}; response: void };
@@ -105,7 +162,9 @@ type AppRPC = {
 };
 
 const appRPC = BrowserView.defineRPC<AppRPC>({
-	maxRequestTime: 120000,
+	// 10 分钟：原生文件夹选择对话框（selectFolder）会阻塞等待用户操作，
+	// 普通 LLM 请求也可能较慢，默认 2 分钟容易误超时
+	maxRequestTime: 600000,
 	handlers: {
 		requests: {
 			// ---- Scenarios ----
@@ -316,6 +375,10 @@ const appRPC = BrowserView.defineRPC<AppRPC>({
 
 			validateDataDir: ({ path }) => {
 				return db.validateDataDir(path);
+			},
+
+			selectFolder: ({ startPath }) => {
+				return selectFolderDialog(startPath ?? "", "请选择数据存储目录");
 			},
 
 			// ---- Window Controls ----

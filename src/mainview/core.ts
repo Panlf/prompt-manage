@@ -57,6 +57,7 @@ type AppRPC = {
 			getDataPath: { params: {}; response: { current: string; default: string; custom: string | null; dbPath: string; configSource: string; portableConfigPath: string } };
 			migrateData: { params: { newPath: string }; response: { success: boolean; newPath: string; message: string } };
 			validateDataDir: { params: { path: string }; response: { ok: boolean; message: string } };
+			selectFolder: { params: { startPath?: string }; response: { path: string | null; message: string } };
 
 			// Window controls
 			windowMinimize: { params: {}; response: void };
@@ -80,7 +81,8 @@ type AppRPC = {
 
 // ---- RPC client ----
 const rpcChannel = Electroview.defineRPC<AppRPC>({
-	maxRequestTime: 120000,
+	// 与后端保持一致：原生文件夹选择对话框（selectFolder）等待用户操作可能较久
+	maxRequestTime: 600000,
 	handlers: { requests: {}, messages: {} },
 });
 

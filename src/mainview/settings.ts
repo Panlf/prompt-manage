@@ -232,7 +232,13 @@ export async function renderDataManagement() {
 			<p class="card-desc" style="margin-bottom: 12px;">修改数据存储路径后，现有数据会自动迁移到新位置，应用将重启以加载新数据。</p>
 			<div class="form-group-inline">
 				<label>当前路径</label>
-				<input type="text" id="data-path-input" value="${escapeHtml(pathInfo.current)}" placeholder="选择或输入新路径" style="font-family: var(--font-mono); font-size: 12px;" />
+				<div style="display: flex; gap: 8px; align-items: center;">
+					<input type="text" id="data-path-input" value="${escapeHtml(pathInfo.current)}" placeholder="选择或输入新路径" style="flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px;" />
+					<button class="btn-small" id="browse-path-btn" title="打开系统文件夹选择器" style="flex-shrink: 0; display: inline-flex; align-items: center;">
+						<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M1.5 3.5a1 1 0 011-1h3l1.5 1.5h5a1 1 0 011 1v6a1 1 0 01-1 1h-9.5a1 1 0 01-1-1v-8.5z"/></svg>
+						浏览...
+					</button>
+				</div>
 			</div>
 			<div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
 				<button class="btn-small btn-primary" id="migrate-btn">
@@ -327,6 +333,23 @@ export async function renderDataManagement() {
 		if (result.success) {
 			await loadLLMConfigs();
 			rerender();
+		}
+	});
+
+	// 浏览：弹出原生文件夹选择对话框，选中后回填输入框
+	const browseBtn = document.getElementById("browse-path-btn") as HTMLButtonElement;
+	browseBtn.addEventListener("click", async () => {
+		const input = document.getElementById("data-path-input") as HTMLInputElement;
+		browseBtn.disabled = true;
+		try {
+			const result = await rpc().request.selectFolder({ startPath: input.value });
+			if (result.path) {
+				input.value = result.path;
+			} else if (result.message) {
+				showToast(result.message, "error");
+			}
+		} finally {
+			browseBtn.disabled = false;
 		}
 	});
 
