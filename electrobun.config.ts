@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "PromptHub",
 		identifier: "promptmanage.app",
-		version: "1.0.0",
+		version: "1.1.0",
 	},
 	build: {
 		bun: {
