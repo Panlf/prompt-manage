@@ -71,28 +71,28 @@ function renderDashboardBody(stats: DashboardStats, recent: PromptWithScenario[]
 		<div class="dash-columns">
 			<div class="dash-panel">
 				<div class="dash-panel-header">
-					<h3>最近使用</h3>
-					<button class="btn-link" data-goto="all-prompts">查看全部</button>
-				</div>
-				<div id="dash-recent" class="prompt-row-list">
-					${
-						recent.length > 0
-							? recent.map((p) => promptRowHtml(p)).join("")
-							: '<div class="empty-state-small">还没有使用记录，点击提示词上的"复制"即记为一次使用</div>'
-					}
-				</div>
-			</div>
-
-			<div class="dash-panel">
-				<div class="dash-panel-header">
 					<h3>我的收藏</h3>
 					<button class="btn-link" data-goto="favorites">查看全部</button>
 				</div>
 				<div id="dash-favorites" class="prompt-row-list">
 					${
 						favorites.length > 0
-							? favorites.map((p) => promptRowHtml(p)).join("")
+							? favorites.map((p) => promptRowHtml(p, { showScenario: false, showUses: false })).join("")
 							: '<div class="empty-state-small">点击提示词标题旁的星形图标即可收藏</div>'
+					}
+				</div>
+			</div>
+
+			<div class="dash-panel">
+				<div class="dash-panel-header">
+					<h3>最近使用</h3>
+					<button class="btn-link" data-goto="all-prompts">查看全部</button>
+				</div>
+				<div id="dash-recent" class="prompt-row-list">
+					${
+						recent.length > 0
+							? recent.map((p) => promptRowHtml(p, { showScenario: false, showUses: false })).join("")
+							: '<div class="empty-state-small">还没有使用记录，点击提示词上的"复制"即记为一次使用</div>'
 					}
 				</div>
 			</div>

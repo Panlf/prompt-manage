@@ -2045,17 +2045,13 @@ select option {
 	margin-top: 2px;
 }
 
+/* 单栏堆叠：双栏布局会把行内容挤到一字一行（场景/标签胶囊竖排），
+   收藏与最近使用各占整行，行内单行省略才有足够宽度 */
 .dash-columns {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
+	grid-template-columns: 1fr;
 	gap: 16px;
 	align-items: start;
-}
-
-@media (max-width: 920px) {
-	.dash-columns {
-		grid-template-columns: 1fr;
-	}
 }
 
 .dash-panel {
@@ -2064,6 +2060,9 @@ select option {
 	border-radius: var(--radius-lg);
 	box-shadow: var(--shadow-card);
 	padding: 18px 20px;
+	/* 网格项默认 min-width:auto 会被行内超长单行文本撑开（1fr 轨道随之膨胀，
+	   整页横向无限拉长），必须允许收缩，行内 ellipsis 才能生效 */
+	min-width: 0;
 }
 
 .dash-panel-header {

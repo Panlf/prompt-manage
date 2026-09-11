@@ -94,11 +94,14 @@ export function bindFavoriteStars(root: ParentNode, refresh = true) {
 
 // ---- Cross-scenario prompt row (all-prompts / favorites / dashboard) ----
 
-export function promptRowHtml(p: PromptWithScenario, opts?: { showFavorite?: boolean; showScenario?: boolean }): string {
+export function promptRowHtml(p: PromptWithScenario, opts?: { showFavorite?: boolean; showScenario?: boolean; showUses?: boolean }): string {
 	const showFavorite = opts?.showFavorite ?? true;
 	const showScenario = opts?.showScenario ?? true;
+	const showUses = opts?.showUses ?? true;
 	cachePromptContent(p);
 	const varCount = (p.content.match(/\{\{[^{}]*\}\}/g) || []).length;
+	// 预览只取前 200 字符：CSS 单行 ellipsis 负责视觉截断，这里避免超长内容整段进入 DOM
+	const preview = p.content.length > 200 ? p.content.slice(0, 200) + "…" : p.content;
 	const tagsHtml =
 		p.tags && p.tags.length > 0
 			? `<span class="prompt-row-tags">${p.tags.map((t) => `<span class="tag-mini">${escapeHtml(t)}</span>`).join("")}</span>`
@@ -114,12 +117,12 @@ export function promptRowHtml(p: PromptWithScenario, opts?: { showFavorite?: boo
 						${p.source === "ai" ? '<span class="source-badge source-ai">AI</span>' : ""}
 						${tagsHtml}
 					</div>
-					<p class="prompt-row-preview">${escapeHtml(p.content)}</p>
+					<p class="prompt-row-preview">${escapeHtml(preview)}</p>
 				</div>
 			</div>
 			<div class="prompt-row-side">
 				${showScenario ? `<span class="prompt-row-scenario">${escapeHtml(p.scenario_name)}</span>` : ""}
-				<span class="prompt-row-uses">${p.use_count > 0 ? `↑ ${p.use_count} 次` : "未使用"}</span>
+				${showUses ? `<span class="prompt-row-uses">${p.use_count > 0 ? `↑ ${p.use_count} 次` : "未使用"}</span>` : ""}
 				<span class="prompt-row-date">${formatDate(p.last_used_at || p.updated_at)}</span>
 				<button class="copy-chip" data-copy-prompt="${p.id}" title="复制提示词">
 					<span class="copy-icon">${ICONS.copy}</span>
