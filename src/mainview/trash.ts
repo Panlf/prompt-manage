@@ -85,7 +85,6 @@ function trashRow(p: PromptWithScenario): string {
 			<div class="trash-row-main">
 				<div class="trash-row-title">
 					${escapeHtml(p.title)}
-					${p.source === "ai" ? '<span class="source-badge source-ai">AI</span>' : ""}
 				</div>
 				<p class="prompt-preview">${escapeHtml(p.content)}</p>
 			</div>

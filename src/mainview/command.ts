@@ -10,6 +10,8 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let results: SearchResults = { scenarios: [], prompts: [] };
 let recents: PromptWithScenario[] = [];
 let selectedIndex = 0;
+// 递增序号：快速连续输入时丢弃过期搜索响应，防止慢响应覆盖新结果
+let refreshSeq = 0;
 
 type PaletteItem = {
 	kind: "scenario" | "prompt";
@@ -32,6 +34,7 @@ export function openPalette() {
 
 export function closePalette() {
 	if (debounceTimer) clearTimeout(debounceTimer);
+	refreshSeq++; // 让在途搜索响应失效
 	paletteEl?.remove();
 	paletteEl = null;
 	searchInput = null;
@@ -95,6 +98,7 @@ function buildPalette() {
 }
 
 async function refresh(query: string) {
+	const seq = ++refreshSeq;
 	selectedIndex = 0;
 	if (!query.trim()) {
 		results = { scenarios: [], prompts: [] };
@@ -102,8 +106,11 @@ async function refresh(query: string) {
 		return;
 	}
 	try {
-		results = await rpc().request.searchAll({ query });
+		const r = await rpc().request.searchAll({ query });
+		if (seq !== refreshSeq) return; // 已有更新的输入/面板已关闭，丢弃过期响应
+		results = r;
 	} catch {
+		if (seq !== refreshSeq) return;
 		results = { scenarios: [], prompts: [] };
 	}
 	renderResults(query.trim());

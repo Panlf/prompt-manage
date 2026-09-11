@@ -21,15 +21,17 @@ function parseTags(input: HTMLInputElement | HTMLTextAreaElement): string[] {
 // ---- Scenario Detail (prompt list) ----
 
 export async function renderScenarioDetail() {
-	if (!state.scenarioId) {
+	const scenarioId = state.scenarioId;
+	if (!scenarioId) {
 		navigate("scenarios");
 		return;
 	}
 	await loadLLMConfigs();
 
-	const scenario = await rpc().request.getScenario({ id: state.scenarioId });
-	const prompts = await rpc().request.getPrompts({ scenario_id: state.scenarioId });
-	if (state.view !== "scenario-detail") return; // user navigated away while loading
+	const scenario = await rpc().request.getScenario({ id: scenarioId });
+	const prompts = await rpc().request.getPrompts({ scenario_id: scenarioId });
+	// 请求期间用户可能已切到其它场景/页面：id 或 view 任一变化即放弃本次渲染
+	if (state.view !== "scenario-detail" || state.scenarioId !== scenarioId) return;
 
 	const promptListHtml =
 		prompts.length > 0
@@ -63,7 +65,7 @@ export async function renderScenarioDetail() {
 
 	document.getElementById("back-btn")!.addEventListener("click", () => navigate("scenarios"));
 	document.getElementById("edit-scenario-btn")!.addEventListener("click", () => showEditScenarioModal(scenario));
-	document.getElementById("new-prompt-btn")!.addEventListener("click", () => showPromptModal(scenario));
+	document.getElementById("new-prompt-btn")!.addEventListener("click", () => showPromptModal());
 
 	bindCopyButtons(document);
 	bindFavoriteStars(document, false);
@@ -79,16 +81,21 @@ export async function renderScenarioDetail() {
 // ---- Prompt Detail (editor + variables + precheck + versions) ----
 
 export async function renderPromptDetail() {
-	if (!state.promptId) {
+	const promptId = state.promptId;
+	if (!promptId) {
 		navigate("scenarios");
 		return;
 	}
 	await loadLLMConfigs();
 
-	const p = await rpc().request.getPrompt({ id: state.promptId });
-	currentVersions = await rpc().request.getPromptVersions({ prompt_id: state.promptId });
-	currentRuns = await rpc().request.getPrecheckRuns({ prompt_id: state.promptId });
-	if (state.view !== "prompt-detail") return; // user navigated away while loading
+	const p = await rpc().request.getPrompt({ id: promptId });
+	const versions = await rpc().request.getPromptVersions({ prompt_id: promptId });
+	// 请求期间用户可能已切到其它提示词/页面：id 或 view 任一变化即放弃本次渲染，
+	// 防止旧提示词的内容与事件监听覆盖新页面
+	if (state.view !== "prompt-detail" || state.promptId !== promptId) return;
+	currentVersions = versions;
+	// 预检结果只在当前会话内展示最新一次，不加载历史记录（重进页面即清空）
+	currentRuns = [];
 	varValues = {};
 	const llmOptions = state.llmConfigs
 		.map((c) => `<option value="${c.id}"${c.is_active ? " selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.model)})</option>`)
@@ -111,29 +118,38 @@ export async function renderPromptDetail() {
 		</div>
 
 		<div class="prompt-detail-layout">
-			<div class="prompt-editor">
-				<div class="form-group">
-					<label>标题</label>
-					<input type="text" id="prompt-title" value="${escapeHtml(p.title)}" />
+			<!-- 第一行：内容编辑 + 版本历史 -->
+			<div class="detail-row detail-row-main">
+				<div class="prompt-editor">
+					<div class="form-group">
+						<label>标题</label>
+						<input type="text" id="prompt-title" value="${escapeHtml(p.title)}" />
+					</div>
+					<div class="form-group">
+						<label>标签（逗号分隔，用于区分同场景下不同方向）</label>
+						<input type="text" id="prompt-tags" value="${escapeHtml((p.tags ?? []).join(", "))}" placeholder="例如：正式, 口语化, 小红书" />
+					</div>
+					<div class="form-group">
+						<label>提示词内容</label>
+						<textarea id="prompt-content" rows="16" placeholder="输入或编辑提示词内容，支持 {{变量名}} 占位符...">${escapeHtml(p.content)}</textarea>
+					</div>
+					<div class="prompt-meta">
+						<button class="fav-star${p.is_favorite ? " active" : ""}" data-fav-prompt="${p.id}" title="${p.is_favorite ? "取消收藏" : "收藏"}">${ICONS.star(!!p.is_favorite)}</button>
+						<span class="card-meta">创建于 ${formatDate(p.created_at)}</span>
+						${p.use_count > 0 ? `<span class="card-meta">已使用 ${p.use_count} 次</span>` : ""}
+					</div>
 				</div>
-				<div class="form-group">
-					<label>标签（逗号分隔，用于区分同场景下不同方向）</label>
-					<input type="text" id="prompt-tags" value="${escapeHtml((p.tags ?? []).join(", "))}" placeholder="例如：正式, 口语化, 小红书" />
-				</div>
-				<div class="form-group">
-					<label>提示词内容</label>
-					<textarea id="prompt-content" rows="16" placeholder="输入或编辑提示词内容，支持 {{变量名}} 占位符...">${escapeHtml(p.content)}</textarea>
-				</div>
-				<div class="prompt-meta">
-					<button class="fav-star${p.is_favorite ? " active" : ""}" data-fav-prompt="${p.id}" title="${p.is_favorite ? "取消收藏" : "收藏"}">${ICONS.star(!!p.is_favorite)}</button>
-					${p.source === "ai" ? '<span class="source-badge source-ai">AI 生成</span>' : '<span class="source-badge source-manual">手动编写</span>'}
-					${p.model_name ? `<span class="card-meta">模型: ${escapeHtml(p.model_name)}</span>` : ""}
-					<span class="card-meta">创建于 ${formatDate(p.created_at)}</span>
-					${p.use_count > 0 ? `<span class="card-meta">已使用 ${p.use_count} 次</span>` : ""}
+
+				<div class="sidebar-section">
+					<h3 class="section-title">版本历史</h3>
+					<div id="version-list" class="version-list">
+						${renderVersionsHtml()}
+					</div>
 				</div>
 			</div>
 
-			<div class="prompt-sidebar">
+			<!-- 第二行：变量填充 + 预检 -->
+			<div class="detail-row detail-row-tools">
 				<div class="sidebar-section" id="variables-section">
 					<div class="section-title-row">
 						<h3 class="section-title">变量填充</h3>
@@ -163,16 +179,14 @@ export async function renderPromptDetail() {
 						<textarea id="precheck-input" rows="4" placeholder="粘贴需要优化的文本..."></textarea>
 					</div>
 					<button class="btn-primary btn-block" id="run-precheck-btn">运行预检</button>
-					<div id="precheck-results" class="precheck-results">
-						${renderRunsHtml()}
-					</div>
 				</div>
+			</div>
 
-				<div class="sidebar-section">
-					<h3 class="section-title">版本历史</h3>
-					<div id="version-list" class="version-list">
-						${renderVersionsHtml()}
-					</div>
+			<!-- 第三行：预检结果（单框，仅最新一次） -->
+			<div class="sidebar-section">
+				<h3 class="section-title">预检结果</h3>
+				<div id="precheck-results" class="precheck-results">
+					${renderRunsHtml()}
 				</div>
 			</div>
 		</div>
@@ -266,7 +280,7 @@ function updateVariablePreview() {
 
 function renderRunsHtml(): string {
 	if (currentRuns.length === 0) {
-		return '<div class="empty-state-small">暂无预检记录</div>';
+		return '<div class="empty-state-small">运行预检后，最新结果显示在这里</div>';
 	}
 	return currentRuns.map(renderRun).join("");
 }
@@ -296,17 +310,117 @@ function renderRun(run: PrecheckRun): string {
 			? `<details class="run-input"><summary>输入文本</summary><pre>${escapeHtml(run.input_text)}</pre></details>`
 			: "";
 
+	// 输出操作：文本/外链可复制（外链复制的是链接本身），任何成功输出都可下载为文件
+	const isDataUri = !isError && run.output_text.startsWith("data:");
+	const isHttpUrl = !isError && /^https?:\/\//.test(run.output_text);
+	const actionsHtml = isError
+		? ""
+		: `
+		<span class="run-actions">
+			${!isDataUri ? `<button class="btn-small" data-run-copy="${run.id}">${isHttpUrl ? "复制链接" : "复制"}</button>` : ""}
+			<button class="btn-small" data-run-download="${run.id}">下载</button>
+		</span>`;
+
 	return `
 		<div class="precheck-run">
 			<div class="run-header">
 				<span class="run-type-badge run-type-${run.type}">${typeLabel}</span>
 				<span class="run-model">${escapeHtml(run.model_name)}</span>
-				<span class="run-date">${formatDate(run.created_at)}</span>
+				${actionsHtml}
 			</div>
 			<div class="run-output">${outputHtml}</div>
 			${inputHtml}
+			<div class="run-footer"><span class="run-date">${formatDate(run.created_at)}</span></div>
 		</div>
 	`;
+}
+
+/** 粗略判断文本是否为 Markdown（决定下载扩展名 .md / .txt）。 */
+function looksLikeMarkdown(text: string): boolean {
+	return (
+		/^#{1,6}\s+\S/m.test(text) || // 标题
+		/```/.test(text) || // 代码块
+		/\*\*[^*\n]+\*\*/.test(text) || // 粗体
+		/^\s*[-*+]\s+\S/m.test(text) || // 无序列表
+		/^\s*\d+\.\s+\S/m.test(text) || // 有序列表
+		/\[[^\]\n]+\]\([^)\n]+\)/.test(text) // 链接
+	);
+}
+
+/** 把预检输出构建为待保存文件：data URI / 外链取回原始文件，纯文本按 markdown 特征存 .md 或 .txt。 */
+async function buildRunOutput(run: PrecheckRun): Promise<{ blob: Blob; filename: string }> {
+	const out = run.output_text;
+	let blob: Blob;
+	let ext: string;
+	if (out.startsWith("data:")) {
+		blob = await (await fetch(out)).blob();
+		ext = out.slice(5, out.indexOf(";")).split("/")[1] || "bin";
+	} else if (/^https?:\/\//.test(out)) {
+		const res = await fetch(out);
+		if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		blob = await res.blob();
+		ext = out.match(/\.(png|jpe?g|webp|gif|svg|pdf)(?:\?|#|$)/i)?.[1]?.toLowerCase() || "bin";
+	} else {
+		const md = looksLikeMarkdown(out);
+		blob = new Blob([out], { type: md ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8" });
+		ext = md ? "md" : "txt";
+	}
+	return { blob, filename: `precheck-${run.id}.${ext}` };
+}
+
+/** 弹出系统"另存为"对话框自选路径；不支持时回退为浏览器默认下载。返回 false = 用户取消。 */
+async function saveBlobWithPicker(blob: Blob, filename: string): Promise<boolean> {
+	type SaveHandle = { createWritable: () => Promise<{ write: (d: Blob) => Promise<void>; close: () => Promise<void> }> };
+	const picker = (window as unknown as { showSaveFilePicker?: (o?: { suggestedName?: string }) => Promise<SaveHandle> }).showSaveFilePicker;
+	if (picker) {
+		try {
+			const handle = await picker({ suggestedName: filename });
+			const writable = await handle.createWritable();
+			await writable.write(blob);
+			await writable.close();
+			return true;
+		} catch (err) {
+			if ((err as DOMException)?.name === "AbortError") return false; // 用户取消了保存
+			throw err;
+		}
+	}
+	// 回退：WebView2 不支持保存选择器时走默认下载
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = filename;
+	a.click();
+	setTimeout(() => URL.revokeObjectURL(url), 10_000);
+	return true;
+}
+
+function attachRunListeners() {
+	document.querySelectorAll<HTMLElement>("[data-run-copy]").forEach((btn) => {
+		btn.addEventListener("click", async () => {
+			const id = parseInt(btn.dataset["runCopy"]!);
+			const run = currentRuns.find((r) => r.id === id);
+			if (!run) return;
+			const ok = await copyTextToClipboard(run.output_text);
+			showToast(ok ? "已复制到剪贴板" : "复制失败，请重试", ok ? "success" : "error");
+		});
+	});
+	document.querySelectorAll<HTMLElement>("[data-run-download]").forEach((btn) => {
+		btn.addEventListener("click", async () => {
+			const id = parseInt(btn.dataset["runDownload"]!);
+			const run = currentRuns.find((r) => r.id === id);
+			if (!run) return;
+			btn.textContent = "下载中...";
+			try {
+				const { blob, filename } = await buildRunOutput(run);
+				const saved = await saveBlobWithPicker(blob, filename);
+				if (saved) showToast("已保存", "success");
+			} catch (err) {
+				showToast("下载失败（外链可能限制访问）: " + (err instanceof Error ? err.message : String(err)), "error");
+			} finally {
+				btn.textContent = "下载";
+			}
+		});
+	});
 }
 
 function renderVersionsHtml(): string {
@@ -322,6 +436,7 @@ function renderVersionsHtml(): string {
 					<span class="version-date">${formatDate(v.created_at)}</span>
 					<button class="btn-small" data-action="view">查看</button>
 					<button class="btn-small" data-action="restore">恢复</button>
+					<button class="btn-small danger" data-action="delete">删除</button>
 				</div>
 				<div class="version-content" style="display:none">
 					<pre>${escapeHtml(v.content)}</pre>
@@ -343,7 +458,10 @@ function attachPromptDetailListeners() {
 		}
 	});
 
+	// 保存进行中标志：按钮与 Ctrl/Cmd+S 共用，防止重复提交
+	let savingPrompt = false;
 	const savePrompt = async () => {
+		if (savingPrompt) return;
 		const title = (document.getElementById("prompt-title") as HTMLInputElement).value.trim();
 		const content = (document.getElementById("prompt-content") as HTMLTextAreaElement).value;
 		if (!title) {
@@ -351,7 +469,9 @@ function attachPromptDetailListeners() {
 			return;
 		}
 		const tags = parseTags(document.getElementById("prompt-tags") as HTMLInputElement);
+		savingPrompt = true;
 		const ok = await withToast(() => rpc().request.updatePrompt({ id: state.promptId!, title, content, tags }), "保存失败");
+		savingPrompt = false;
 		if (!ok) return;
 		// Reload versions
 		currentVersions = await rpc().request.getPromptVersions({ prompt_id: state.promptId! });
@@ -418,6 +538,20 @@ function attachPromptDetailListeners() {
 		const llmId = parseInt(llmSelect.value);
 		const inputText = type === "optimize" ? (document.getElementById("precheck-input") as HTMLTextAreaElement).value : "";
 
+		// 变量校验与填充：有变量但未填写完整时阻止提交；齐全则发送填充后的编辑器内容
+		const editorContent = (document.getElementById("prompt-content") as HTMLTextAreaElement).value;
+		const varNames = extractVariables(editorContent);
+		let contentToSend = editorContent;
+		if (varNames.length > 0) {
+			const unfilled = varNames.filter((n) => !(varValues[n] ?? "").trim());
+			if (unfilled.length > 0) {
+				const preview = unfilled.slice(0, 3).join("、");
+				showToast(`还有 ${unfilled.length} 个变量未填写：${preview}${unfilled.length > 3 ? " 等" : ""}，请补充完整后再运行预检`, "error");
+				return;
+			}
+			contentToSend = fillVariables(editorContent, varValues);
+		}
+
 		runBtn.textContent = "生成中...";
 		runBtn.disabled = true;
 
@@ -427,9 +561,11 @@ function attachPromptDetailListeners() {
 				type,
 				input_text: inputText,
 				llm_config_id: llmId,
+				content: contentToSend,
 			});
-			currentRuns.unshift(run);
+			currentRuns = [run]; // 单框展示：新结果覆盖上一次
 			document.getElementById("precheck-results")!.innerHTML = renderRunsHtml();
+			attachRunListeners();
 			if (run.output_text.startsWith("[Error]")) {
 				showToast("预检失败: " + run.output_text.substring(8), "error");
 			} else {
@@ -443,6 +579,7 @@ function attachPromptDetailListeners() {
 		runBtn.disabled = false;
 	});
 
+	attachRunListeners();
 	attachVersionListeners();
 }
 
@@ -463,10 +600,31 @@ function attachVersionListeners() {
 			refreshVariablePanel();
 			showToast(`已恢复到 v${version.version_number}，请点击保存以确认`, "info");
 		});
+
+		el.querySelector('[data-action="delete"]')!.addEventListener("click", async () => {
+			const version = currentVersions.find((v) => v.id === versionId);
+			if (!version) return;
+			const ok = await showConfirm({
+				title: `删除版本 v${version.version_number}？`,
+				message: "该历史版本将被永久删除，不影响提示词当前内容。删除后剩余版本会自动重新编号。",
+				confirmText: "删除",
+				danger: true,
+			});
+			if (!ok) return;
+			try {
+				await rpc().request.deletePromptVersion({ id: versionId });
+				currentVersions = await rpc().request.getPromptVersions({ prompt_id: state.promptId! });
+				document.getElementById("version-list")!.innerHTML = renderVersionsHtml();
+				attachVersionListeners();
+				showToast("版本已删除", "success");
+			} catch (err) {
+				showToast("删除失败: " + (err instanceof Error ? err.message : String(err)), "error");
+			}
+		});
 	});
 }
 
-// ---- New Prompt Modal (manual + AI generation) ----
+// ---- New Prompt Modal ----
 
 /** 业务弹窗通用装配：不响应遮罩点击关闭（防误触丢内容），Esc = 取消。返回 close。 */
 function setupModal(close: () => void): () => void {
@@ -481,7 +639,7 @@ function setupModal(close: () => void): () => void {
 	return () => document.removeEventListener("keydown", esc, true);
 }
 
-function showPromptModal(scenario: Scenario) {
+function showPromptModal() {
 	const draft = drafts.prompt;
 	const overlay = document.createElement("div");
 	overlay.className = "modal-overlay";
@@ -498,33 +656,7 @@ function showPromptModal(scenario: Scenario) {
 			</div>
 			<div class="form-group">
 				<label>提示词内容</label>
-				<textarea id="pm-content" rows="10" placeholder="输入提示词内容，或使用下方 AI 生成。支持 {{变量名}} 占位符。">${escapeHtml(draft?.content ?? "")}</textarea>
-			</div>
-			<div class="ai-section">
-				<div class="ai-section-title">AI 生成（可选）</div>
-				<div class="form-row">
-					<div class="form-group form-group-inline" style="flex:1">
-						<label>生成说明</label>
-						<input type="text" id="pm-desc" value="${escapeHtml(draft?.aiDesc ?? "")}" placeholder="描述你想要的提示词，例如：写一个产品文案的提示词" />
-					</div>
-					${
-						state.llmConfigs.length > 0
-							? `
-					<div class="form-group form-group-inline">
-						<label>模型</label>
-						<select id="pm-llm">
-							${state.llmConfigs.map((c) => `<option value="${c.id}"${c.is_active ? " selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
-						</select>
-					</div>
-					`
-							: ""
-					}
-					<div class="form-group ai-generate-cell">
-						<label aria-hidden="true">&nbsp;</label>
-						<button class="btn-secondary" id="pm-generate" ${state.llmConfigs.length === 0 ? "disabled" : ""}>AI生成</button>
-					</div>
-				</div>
-				${state.llmConfigs.length === 0 ? '<p class="empty-state-small">请先在模型设置中配置大模型</p>' : ""}
+				<textarea id="pm-content" rows="10" placeholder="输入提示词内容，支持 {{变量名}} 占位符。">${escapeHtml(draft?.content ?? "")}</textarea>
 			</div>
 			<p class="form-hint">已填写的内容会自动保留，重新打开即可继续填写。</p>
 			<div class="modal-actions">
@@ -535,16 +667,12 @@ function showPromptModal(scenario: Scenario) {
 	`;
 	document.body.appendChild(overlay);
 
-	let usedAI = false;
-	let aiModelName = "";
-
 	// 草稿实时捕获
 	const captureDraft = () => {
 		drafts.prompt = {
 			title: (overlay.querySelector("#pm-title") as HTMLInputElement).value,
 			tags: (overlay.querySelector("#pm-tags") as HTMLInputElement).value,
 			content: (overlay.querySelector("#pm-content") as HTMLTextAreaElement).value,
-			aiDesc: (overlay.querySelector("#pm-desc") as HTMLInputElement).value,
 		};
 	};
 	overlay.addEventListener("input", captureDraft);
@@ -555,38 +683,10 @@ function showPromptModal(scenario: Scenario) {
 	};
 	const detachEsc = setupModal(close);
 
-	// AI generate
-	const genBtn = overlay.querySelector("#pm-generate") as HTMLButtonElement;
-	genBtn.addEventListener("click", async () => {
-		const desc = (overlay.querySelector("#pm-desc") as HTMLInputElement).value.trim();
-		const llmId = parseInt((overlay.querySelector("#pm-llm") as HTMLSelectElement).value);
-		const config = state.llmConfigs.find((c) => c.id === llmId);
-		if (!config) return;
-
-		genBtn.textContent = "生成中...";
-		genBtn.disabled = true;
-
-		try {
-			const result = await rpc().request.generatePromptAI({
-				scenario_name: scenario.name,
-				description: desc || scenario.description,
-				llm_config_id: llmId,
-			});
-			(overlay.querySelector("#pm-content") as HTMLTextAreaElement).value = result.content;
-			captureDraft();
-			usedAI = true;
-			aiModelName = config.name;
-			showToast("AI 生成完成", "success");
-		} catch (err) {
-			showToast("生成失败: " + (err instanceof Error ? err.message : String(err)), "error");
-		}
-
-		genBtn.textContent = "AI生成";
-		genBtn.disabled = false;
-	});
-
 	// Save
+	const saveBtn = overlay.querySelector("#pm-save") as HTMLButtonElement;
 	const save = async () => {
+		if (saveBtn.disabled) return; // 请求进行中，防双击重复创建
 		const title = (overlay.querySelector("#pm-title") as HTMLInputElement).value.trim();
 		const content = (overlay.querySelector("#pm-content") as HTMLTextAreaElement).value;
 		if (!title) {
@@ -598,18 +698,18 @@ function showPromptModal(scenario: Scenario) {
 			return;
 		}
 		const tags = parseTags(overlay.querySelector("#pm-tags") as HTMLInputElement);
+		saveBtn.disabled = true;
 		const ok = await withToast(
 			() =>
 				rpc().request.createPrompt({
 					scenario_id: state.scenarioId!,
 					title,
 					content,
-					source: usedAI ? "ai" : "manual",
-					model_name: usedAI ? aiModelName : undefined,
 					tags,
 				}),
 			"创建失败",
 		);
+		saveBtn.disabled = false;
 		if (!ok) return;
 		drafts.prompt = null; // 保存成功才清草稿
 		close();
@@ -618,7 +718,7 @@ function showPromptModal(scenario: Scenario) {
 	};
 
 	overlay.querySelector("#pm-cancel")!.addEventListener("click", close);
-	overlay.querySelector("#pm-save")!.addEventListener("click", save);
+	saveBtn.addEventListener("click", save);
 }
 
 // ---- Edit Scenario Modal ----

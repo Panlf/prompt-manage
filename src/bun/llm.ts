@@ -2,18 +2,23 @@ import type { LLMConfig } from "../shared/types";
 
 type Message = { role: string; content: string };
 
+/** 测试连接等轻量请求的硬超时：快速失败，避免配置错误时长时间挂起 */
 const REQUEST_TIMEOUT_MS = 60_000;
+/** 生成类请求（预检 / 生图）的超时：长输出模型可达数分钟 */
+const GENERATION_TIMEOUT_MS = 300_000;
 
 /**
  * fetch with a hard timeout so a wrong base_url / dead network fails fast
- * instead of hanging until the RPC layer's 120s cap.
+ * instead of hanging until the RPC layer's cap.
  */
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
 	try {
-		return await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+		return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 	} catch (err) {
-		if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-			throw new Error(`请求超时（${REQUEST_TIMEOUT_MS / 1000} 秒）：请检查 Base URL 是否可达以及网络连通性`);
+		// AbortSignal.timeout 抛出的 DOMException 在 Bun 下不是 Error 实例，必须按 name 判断
+		const name = (err as { name?: string })?.name;
+		if (name === "TimeoutError" || name === "AbortError") {
+			throw new Error(`请求超时（${timeoutMs / 1000} 秒）：模型响应过慢或网络不通，请稍后重试`);
 		}
 		throw err;
 	}
@@ -23,7 +28,7 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
  * Call an OpenAI-compatible chat completion endpoint.
  * Works with DeepSeek, MiMo, Ollama (/v1), and any OpenAI-compatible provider.
  */
-export async function chatCompletion(config: LLMConfig, messages: Message[]): Promise<string> {
+export async function chatCompletion(config: LLMConfig, messages: Message[], timeoutMs = REQUEST_TIMEOUT_MS): Promise<string> {
 	const url = config.base_url.replace(/\/$/, "") + "/chat/completions";
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
@@ -41,7 +46,7 @@ export async function chatCompletion(config: LLMConfig, messages: Message[]): Pr
 			stream: false,
 			temperature: 0.7,
 		}),
-	});
+	}, timeoutMs);
 
 	if (!response.ok) {
 		const errText = await response.text().catch(() => "");
@@ -57,25 +62,10 @@ export async function chatCompletion(config: LLMConfig, messages: Message[]): Pr
 }
 
 /**
- * Generate a prompt using the LLM based on a scenario description.
- */
-export async function generatePromptAI(config: LLMConfig, scenarioName: string, description: string): Promise<string> {
-	const systemMsg: Message = {
-		role: "system",
-		content: "你是一个专业的提示词工程师。请根据用户的使用场景描述，生成一个高质量的提示词。只返回提示词内容本身，不要加任何额外说明或解释。",
-	};
-	const userMsg: Message = {
-		role: "user",
-		content: `使用场景名称：${scenarioName}\n场景描述：${description}\n\n请生成一个适用于该场景的提示词。`,
-	};
-	return chatCompletion(config, [systemMsg, userMsg]);
-}
-
-/**
  * Run a text generation precheck using the prompt content.
  */
 export async function generateText(config: LLMConfig, promptContent: string): Promise<string> {
-	return chatCompletion(config, [{ role: "user", content: promptContent }]);
+	return chatCompletion(config, [{ role: "user", content: promptContent }], GENERATION_TIMEOUT_MS);
 }
 
 /**
@@ -90,7 +80,7 @@ export async function optimizeText(config: LLMConfig, promptContent: string, inp
 		role: "user",
 		content: inputText,
 	};
-	return chatCompletion(config, [systemMsg, userMsg]);
+	return chatCompletion(config, [systemMsg, userMsg], GENERATION_TIMEOUT_MS);
 }
 
 /**
@@ -116,7 +106,7 @@ export async function generateImage(config: LLMConfig, promptContent: string): P
 			size: "1024x1024",
 			response_format: "b64_json",
 		}),
-	});
+	}, GENERATION_TIMEOUT_MS);
 
 	if (!response.ok) {
 		const errText = await response.text().catch(() => "");

@@ -247,7 +247,9 @@ function showScenarioModal(scenario?: Scenario) {
 	};
 	const detachEsc = setupModal(close);
 
+	const saveBtn = overlay.querySelector("#modal-save") as HTMLButtonElement;
 	const save = async () => {
+		if (saveBtn.disabled) return; // 请求进行中，防双击重复创建
 		const name = nameInput.value.trim();
 		if (!name) {
 			showToast("请输入场景名称", "error");
@@ -259,6 +261,7 @@ function showScenarioModal(scenario?: Scenario) {
 			.map((t) => t.trim())
 			.filter((t) => t);
 
+		saveBtn.disabled = true;
 		const ok = await withToast(async () => {
 			if (scenario) {
 				await rpc().request.updateScenario({ id: scenario.id, name, description: desc, tags });
@@ -266,6 +269,7 @@ function showScenarioModal(scenario?: Scenario) {
 				await rpc().request.createScenario({ name, description: desc, tags });
 			}
 		}, "保存失败");
+		saveBtn.disabled = false;
 		if (!ok) return;
 		if (isNew) drafts.scenario = null; // 保存成功才清草稿
 		showToast(scenario ? "场景已更新" : "场景已创建", "success");
@@ -276,7 +280,7 @@ function showScenarioModal(scenario?: Scenario) {
 	};
 
 	overlay.querySelector("#modal-cancel")!.addEventListener("click", close);
-	overlay.querySelector("#modal-save")!.addEventListener("click", save);
+	saveBtn.addEventListener("click", save);
 	nameInput.addEventListener("keydown", (e) => {
 		if (e.key === "Enter") save();
 	});

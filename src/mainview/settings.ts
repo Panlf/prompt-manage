@@ -67,10 +67,16 @@ function attachListeners() {
 			if (action === "test") {
 				el.textContent = "测试中...";
 				(el as HTMLButtonElement).disabled = true;
-				const result = await rpc().request.testLLMConfig({ id });
-				el.textContent = "测试";
-				(el as HTMLButtonElement).disabled = false;
-				showToast(result.message, result.success ? "success" : "error");
+				try {
+					const result = await rpc().request.testLLMConfig({ id });
+					showToast(result.message, result.success ? "success" : "error");
+				} catch (err) {
+					showToast("测试失败: " + (err instanceof Error ? err.message : String(err)), "error");
+				} finally {
+					// 无论成功失败都恢复按钮，避免异常路径下按钮永久卡在"测试中..."
+					el.textContent = "测试";
+					(el as HTMLButtonElement).disabled = false;
+				}
 			} else if (action === "edit") {
 				const config = state.llmConfigs.find((c) => c.id === id);
 				if (config) showLLMModal(config);
@@ -88,7 +94,8 @@ function attachListeners() {
 					danger: true,
 				});
 				if (!ok) return;
-				await rpc().request.deleteLLMConfig({ id });
+				const deleted = await withToast(() => rpc().request.deleteLLMConfig({ id }), "删除失败");
+				if (!deleted) return;
 				await loadLLMConfigs();
 				rerender();
 				showToast("配置已删除", "success");
@@ -169,9 +176,11 @@ function showLLMModal(config?: LLMConfig) {
 		overlay.remove();
 	};
 	const detachEsc = setupModal(close);
+	const saveBtn = overlay.querySelector("#modal-save") as HTMLButtonElement;
 	overlay.querySelector("#modal-cancel")!.addEventListener("click", close);
 
 	const save = async () => {
+		if (saveBtn.disabled) return; // 请求进行中，防双击重复提交
 		const name = (overlay.querySelector("#llm-name") as HTMLInputElement).value.trim();
 		const provider = providerSelect.value;
 		const baseUrl = urlInput.value.trim();
@@ -183,6 +192,7 @@ function showLLMModal(config?: LLMConfig) {
 			return;
 		}
 
+		saveBtn.disabled = true;
 		const ok = await withToast(async () => {
 			if (config) {
 				await rpc().request.updateLLMConfig({ id: config.id, name, provider, api_key: apiKey, base_url: baseUrl, model });
@@ -190,6 +200,7 @@ function showLLMModal(config?: LLMConfig) {
 				await rpc().request.createLLMConfig({ name, provider, api_key: apiKey, base_url: baseUrl, model });
 			}
 		}, "保存失败");
+		saveBtn.disabled = false;
 		if (!ok) return;
 		showToast(config ? "配置已更新" : "配置已添加", "success");
 		close();
@@ -197,26 +208,25 @@ function showLLMModal(config?: LLMConfig) {
 		rerender();
 	};
 
-	overlay.querySelector("#modal-save")!.addEventListener("click", save);
+	saveBtn.addEventListener("click", save);
 }
 
 // ---- Data Management ----
 
 export async function renderDataManagement() {
-		// 获取当前存储路径
-		let pathInfo: { current: string; default: string; custom: string | null; dbPath: string; configSource: string; portableConfigPath: string };
-		try {
-			pathInfo = await rpc().request.getDataPath({});
-		} catch {
-			pathInfo = { current: "", default: "", custom: null, dbPath: "", configSource: "appdata", portableConfigPath: "" };
-		}
-		if (state.view !== "data") return; // user navigated away while loading
-
-		const configHint =
-			pathInfo.configSource === "portable"
-				? `配置来源：便携版 config.json（${pathInfo.portableConfigPath}）。升级替换程序时"覆盖解压"或保留此文件，数据目录选择永不丢失。`
-				: "配置来源：应用数据目录 config.json（位于系统用户目录，升级替换程序时自动保留）。也可以在程序 bin 目录创建 config.json 指定数据目录。";
+	// 获取当前存储路径
+	let pathInfo: { current: string; default: string; custom: string | null; dbPath: string; configSource: string; portableConfigPath: string };
+	try {
+		pathInfo = await rpc().request.getDataPath({});
+	} catch {
+		pathInfo = { current: "", default: "", custom: null, dbPath: "", configSource: "appdata", portableConfigPath: "" };
+	}
 	if (state.view !== "data") return; // user navigated away while loading
+
+	const configHint =
+		pathInfo.configSource === "portable"
+			? `配置来源：便携版 config.json（${pathInfo.portableConfigPath}）。升级替换程序时"覆盖解压"或保留此文件，数据目录选择永不丢失。`
+			: "配置来源：应用数据目录 config.json（位于系统用户目录，升级替换程序时自动保留）。也可以在程序 bin 目录创建 config.json 指定数据目录。";
 
 	setMainContent(`
 		<div class="page-header">
@@ -326,13 +336,18 @@ export async function renderDataManagement() {
 			fileInput.value = "";
 			return;
 		}
-		const text = await file.text();
-		const result = await rpc().request.importData({ data: text });
-		showToast(result.message, result.success ? "success" : "error");
-		fileInput.value = "";
-		if (result.success) {
-			await loadLLMConfigs();
-			rerender();
+		try {
+			const text = await file.text();
+			const result = await rpc().request.importData({ data: text });
+			showToast(result.message, result.success ? "success" : "error");
+			if (result.success) {
+				await loadLLMConfigs();
+				rerender();
+			}
+		} catch (err) {
+			showToast("导入失败: " + (err instanceof Error ? err.message : String(err)), "error");
+		} finally {
+			fileInput.value = "";
 		}
 	});
 
@@ -359,9 +374,14 @@ export async function renderDataManagement() {
 		const status = document.getElementById("path-check-status")!;
 		status.textContent = "检查中…";
 		status.style.color = "var(--text-secondary)";
-		const result = await rpc().request.validateDataDir({ path: input.value });
-		status.textContent = result.message;
-		status.style.color = result.ok ? "var(--success)" : "var(--danger)";
+		try {
+			const result = await rpc().request.validateDataDir({ path: input.value });
+			status.textContent = result.message;
+			status.style.color = result.ok ? "var(--success)" : "var(--danger)";
+		} catch (err) {
+			status.textContent = "检查失败: " + (err instanceof Error ? err.message : String(err));
+			status.style.color = "var(--danger)";
+		}
 	});
 
 	// 迁移数据
@@ -381,15 +401,21 @@ export async function renderDataManagement() {
 
 		migrateBtn.textContent = "迁移中...";
 		migrateBtn.disabled = true;
-		const result = await rpc().request.migrateData({ newPath });
-		if (result.success) {
-			showToast(result.message, "success");
-			// 延迟关闭，让 toast 显示
-			setTimeout(() => {
-				rpc().request.windowClose({});
-			}, 2000);
-		} else {
-			showToast(result.message, "error");
+		try {
+			const result = await rpc().request.migrateData({ newPath });
+			if (result.success) {
+				showToast(result.message, "success");
+				// 延迟关闭，让 toast 显示
+				setTimeout(() => {
+					rpc().request.windowClose({});
+				}, 2000);
+			} else {
+				showToast(result.message, "error");
+				migrateBtn.textContent = "迁移到新位置";
+				migrateBtn.disabled = false;
+			}
+		} catch (err) {
+			showToast("迁移失败: " + (err instanceof Error ? err.message : String(err)), "error");
 			migrateBtn.textContent = "迁移到新位置";
 			migrateBtn.disabled = false;
 		}
@@ -407,12 +433,18 @@ export async function renderDataManagement() {
 			if (!ok) return;
 			(resetBtn as HTMLButtonElement).textContent = "迁移中...";
 			(resetBtn as HTMLButtonElement).disabled = true;
-			const result = await rpc().request.migrateData({ newPath: pathInfo.default });
-			if (result.success) {
-				showToast(result.message, "success");
-				setTimeout(() => rpc().request.windowClose({}), 2000);
-			} else {
-				showToast(result.message, "error");
+			try {
+				const result = await rpc().request.migrateData({ newPath: pathInfo.default });
+				if (result.success) {
+					showToast(result.message, "success");
+					setTimeout(() => rpc().request.windowClose({}), 2000);
+				} else {
+					showToast(result.message, "error");
+					(resetBtn as HTMLButtonElement).textContent = "恢复默认位置";
+					(resetBtn as HTMLButtonElement).disabled = false;
+				}
+			} catch (err) {
+				showToast("迁移失败: " + (err instanceof Error ? err.message : String(err)), "error");
 				(resetBtn as HTMLButtonElement).textContent = "恢复默认位置";
 				(resetBtn as HTMLButtonElement).disabled = false;
 			}

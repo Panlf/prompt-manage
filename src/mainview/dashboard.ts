@@ -1,4 +1,4 @@
-import { state, setMainContent, navigate, rpc, type ViewName } from "./core";
+import { state, setMainContent, navigate, rpc, isMacPlatform, type ViewName } from "./core";
 import { promptRowHtml, bindPromptRows, ICONS } from "./components";
 import type { DashboardStats, PromptWithScenario } from "../shared/types";
 
@@ -11,7 +11,7 @@ export async function renderDashboard() {
 	if (state.view !== "dashboard") return; // user navigated away while loading
 
 	const isEmpty = stats.scenario_count === 0;
-	const modKey = navigator.platform.toUpperCase().includes("MAC") ? "⌘K" : "Ctrl+K";
+	const modKey = isMacPlatform() ? "⌘K" : "Ctrl+K";
 
 	setMainContent(`
 		<div class="page-header">

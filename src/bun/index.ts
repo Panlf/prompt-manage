@@ -92,7 +92,7 @@ type AppRPC = {
 			// Prompts
 			getPrompts: { params: { scenario_id: number }; response: Prompt[] };
 			getPrompt: { params: { id: number }; response: Prompt };
-			createPrompt: { params: { scenario_id: number; title: string; content: string; source: string; model_name?: string; tags?: string[] }; response: Prompt };
+			createPrompt: { params: { scenario_id: number; title: string; content: string; tags?: string[] }; response: Prompt };
 			updatePrompt: { params: { id: number; title: string; content: string; tags?: string[] }; response: Prompt };
 			trashPrompt: { params: { id: number }; response: { success: boolean } };
 			restorePrompt: { params: { id: number }; response: Prompt };
@@ -107,7 +107,7 @@ type AppRPC = {
 			togglePromptFavorite: { params: { id: number }; response: Prompt };
 			recordPromptUse: { params: { id: number }; response: { success: boolean } };
 			getFavoritePrompts: { params: {}; response: PromptWithScenario[] };
-			getAllPrompts: { params: { sort: string; favorite?: boolean; source?: string; tag?: string }; response: PromptWithScenario[] };
+			getAllPrompts: { params: { sort: string; favorite?: boolean; tag?: string; limit?: number; offset?: number }; response: { items: PromptWithScenario[]; total: number } };
 			getRecentPrompts: { params: { limit: number }; response: PromptWithScenario[] };
 
 			// Dashboard & search
@@ -117,13 +117,11 @@ type AppRPC = {
 			// Prompt versions
 			getPromptVersions: { params: { prompt_id: number }; response: PromptVersion[] };
 			savePromptVersion: { params: { prompt_id: number; content: string; note: string }; response: PromptVersion };
+			deletePromptVersion: { params: { id: number }; response: { success: boolean } };
 
 			// Precheck
 			getPrecheckRuns: { params: { prompt_id: number }; response: PrecheckRun[] };
-			runPrecheck: { params: { prompt_id: number; type: string; input_text: string; llm_config_id: number }; response: PrecheckRun };
-
-			// AI prompt generation
-			generatePromptAI: { params: { scenario_name: string; description: string; llm_config_id: number }; response: { content: string } };
+			runPrecheck: { params: { prompt_id: number; type: string; input_text: string; llm_config_id: number; content?: string }; response: PrecheckRun };
 
 			// LLM configs
 			getLLMConfigs: { params: {}; response: LLMConfig[] };
@@ -208,8 +206,8 @@ const appRPC = BrowserView.defineRPC<AppRPC>({
 				if (!p) throw new Error("Prompt not found");
 				return p;
 			},
-			createPrompt: ({ scenario_id, title, content, source, model_name, tags }) => {
-				return db.createPrompt(scenario_id, title, content, source, model_name ?? null, tags);
+			createPrompt: ({ scenario_id, title, content, tags }) => {
+				return db.createPrompt(scenario_id, title, content, tags);
 			},
 			updatePrompt: ({ id, title, content, tags }) => {
 				return db.updatePrompt(id, title, content, tags);
@@ -248,8 +246,8 @@ const appRPC = BrowserView.defineRPC<AppRPC>({
 			getFavoritePrompts: () => {
 				return db.getFavoritePrompts();
 			},
-			getAllPrompts: ({ sort, favorite, source, tag }) => {
-				return db.getAllPrompts(sort as PromptSort, { favorite, source, tag });
+			getAllPrompts: ({ sort, favorite, tag, limit, offset }) => {
+				return db.getAllPrompts(sort as PromptSort, { favorite, tag, limit, offset });
 			},
 			getRecentPrompts: ({ limit }) => {
 				return db.getRecentPrompts(limit);
@@ -270,25 +268,31 @@ const appRPC = BrowserView.defineRPC<AppRPC>({
 			savePromptVersion: ({ prompt_id, content, note }) => {
 				return db.savePromptVersion(prompt_id, content, note);
 			},
+			deletePromptVersion: ({ id }) => {
+				db.deletePromptVersion(id);
+				return { success: true };
+			},
 
 			// ---- Precheck ----
 			getPrecheckRuns: ({ prompt_id }) => {
 				return db.getPrecheckRuns(prompt_id);
 			},
-			runPrecheck: async ({ prompt_id, type, input_text, llm_config_id }) => {
+			runPrecheck: async ({ prompt_id, type, input_text, llm_config_id, content }) => {
 				const prompt = db.getPrompt(prompt_id);
 				if (!prompt) throw new Error("Prompt not found");
 				const config = db.getLLMConfig(llm_config_id);
 				if (!config) throw new Error("LLM config not found");
 
+				// 前端传入变量填充后的编辑器内容；未传则回退到已保存内容
+				const promptContent = content ?? prompt.content;
 				let output = "";
 				try {
 					if (type === "text") {
-						output = await llm.generateText(config, prompt.content);
+						output = await llm.generateText(config, promptContent);
 					} else if (type === "image") {
-						output = await llm.generateImage(config, prompt.content);
+						output = await llm.generateImage(config, promptContent);
 					} else if (type === "optimize") {
-						output = await llm.optimizeText(config, prompt.content, input_text);
+						output = await llm.optimizeText(config, promptContent, input_text);
 					} else {
 						throw new Error(`Unknown precheck type: ${type}`);
 					}
@@ -298,14 +302,6 @@ const appRPC = BrowserView.defineRPC<AppRPC>({
 				}
 
 				return db.savePrecheckRun(prompt_id, type, input_text, output, config.name);
-			},
-
-			// ---- AI prompt generation ----
-			generatePromptAI: async ({ scenario_name, description, llm_config_id }) => {
-				const config = db.getLLMConfig(llm_config_id);
-				if (!config) throw new Error("LLM config not found");
-				const content = await llm.generatePromptAI(config, scenario_name, description);
-				return { content };
 			},
 
 			// ---- LLM configs ----
@@ -348,7 +344,13 @@ const appRPC = BrowserView.defineRPC<AppRPC>({
 					return { success: true, message: "导入成功" };
 				} catch (err) {
 					const msg = err instanceof Error ? err.message : String(err);
-					return { success: false, message: msg };
+					// 常见约束错误翻译为用户可读的提示（导入在事务内回滚，当前数据不受影响）
+					const friendly = /FOREIGN KEY/i.test(msg)
+						? "备份文件数据不完整：存在引用了不存在场景的记录，已取消导入，当前数据未受影响"
+						: /UNIQUE constraint/i.test(msg)
+							? "备份文件存在重复的编号记录，已取消导入，当前数据未受影响"
+							: msg;
+					return { success: false, message: friendly };
 				}
 			},
 

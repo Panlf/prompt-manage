@@ -30,8 +30,8 @@ describe("prompt lifecycle", () => {
 		const s = db.createScenario("写作", "文案写作场景", ["营销", "文案"]);
 		scenarioId = s.id;
 		expect(s.tags).toEqual(["文案", "营销"]); // sorted
-		db.createPrompt(scenarioId, "标题A", "内容A：写一段{{产品}}的介绍", "manual", null);
-		db.createPrompt(scenarioId, "标题B", "内容B", "ai", "DeepSeek");
+		db.createPrompt(scenarioId, "标题A", "内容A：写一段{{产品}}的介绍");
+		db.createPrompt(scenarioId, "标题B", "内容B");
 		expect(db.getPrompts(scenarioId)).toHaveLength(2);
 	});
 
@@ -44,7 +44,7 @@ describe("prompt lifecycle", () => {
 	});
 
 	test("trashed prompt is hidden from active queries and listed in trash", () => {
-		const active = db.getAllPrompts("updated");
+		const active = db.getAllPrompts("updated").items;
 		const trashed = db.getTrashedPrompts();
 		expect(active.every((p) => p.deleted_at === null)).toBe(true);
 		expect(trashed).toHaveLength(1);
@@ -75,7 +75,7 @@ describe("prompt lifecycle", () => {
 
 describe("favorites & usage", () => {
 	test("toggle favorite flips state", () => {
-		const [p] = db.getAllPrompts("updated");
+		const [p] = db.getAllPrompts("updated").items;
 		expect(p.is_favorite).toBe(0);
 		const on = db.togglePromptFavorite(p.id);
 		expect(on.is_favorite).toBe(1);
@@ -84,7 +84,7 @@ describe("favorites & usage", () => {
 	});
 
 	test("recordPromptUse increments count and sets last_used_at", () => {
-		const [p] = db.getAllPrompts("updated");
+		const [p] = db.getAllPrompts("updated").items;
 		expect(p.use_count).toBe(0);
 		expect(p.last_used_at).toBeNull();
 		db.recordPromptUse(p.id);
@@ -95,7 +95,7 @@ describe("favorites & usage", () => {
 	});
 
 	test("favorites list contains only favorites", () => {
-		const all = db.getAllPrompts("updated");
+		const all = db.getAllPrompts("updated").items;
 		db.togglePromptFavorite(all[0].id);
 		const favs = db.getFavoritePrompts();
 		expect(favs).toHaveLength(1);
@@ -103,7 +103,7 @@ describe("favorites & usage", () => {
 	});
 
 	test("most_used sort orders by use_count", () => {
-		const sorted = db.getAllPrompts("most_used");
+		const sorted = db.getAllPrompts("most_used").items;
 		for (let i = 1; i < sorted.length; i++) {
 			expect(sorted[i - 1].use_count).toBeGreaterThanOrEqual(sorted[i].use_count);
 		}
@@ -113,19 +113,14 @@ describe("favorites & usage", () => {
 		const recent = db.getRecentPrompts(10);
 		expect(recent.every((p) => p.last_used_at !== null)).toBe(true);
 	});
-
-	test("source filter works", () => {
-		const aiOnly = db.getAllPrompts("updated", { source: "ai" });
-		expect(aiOnly.every((p) => p.source === "ai")).toBe(true);
-	});
 });
 
 describe("global search", () => {
 	// Dedicated fixture data (lifecycle tests above purge some earlier prompts)
 	beforeAll(() => {
 		const s = db.createScenario("搜索场景", "专供搜索测试", ["搜索标签"]);
-		db.createPrompt(s.id, "搜索标题甲", "内容：写一段{{产品}}的介绍", "manual", null);
-		db.createPrompt(s.id, "Other title", "完全不同的内容", "manual", null);
+		db.createPrompt(s.id, "搜索标题甲", "内容：写一段{{产品}}的介绍");
+		db.createPrompt(s.id, "Other title", "完全不同的内容");
 	});
 
 	test("finds prompts by title", () => {
@@ -173,7 +168,7 @@ describe("export / import", () => {
 		db.importData(json);
 		const stats = db.getDashboardStats();
 		expect(stats.scenario_count).toBeGreaterThanOrEqual(1);
-		const prompts = db.getAllPrompts("updated");
+		const prompts = db.getAllPrompts("updated").items;
 		expect(prompts.length).toBeGreaterThanOrEqual(1);
 	});
 
@@ -201,7 +196,7 @@ describe("export / import", () => {
 
 describe("empty trash", () => {
 	test("emptyTrash purges all trashed prompts and returns the count", () => {
-		const prompts = db.getAllPrompts("updated");
+		const prompts = db.getAllPrompts("updated").items;
 		for (const p of prompts) db.trashPrompt(p.id);
 		expect(db.getTrashedPrompts().length).toBe(prompts.length);
 		const purged = db.emptyTrash();
@@ -219,8 +214,8 @@ describe("prompt tags", () => {
 	beforeAll(() => {
 		const s = db.createScenario("标签场景", "", []);
 		scenarioId = s.id;
-		const a = db.createPrompt(scenarioId, "提示A", "内容A", "manual", null, ["正式", "小红书"]);
-		const b = db.createPrompt(scenarioId, "提示B", "内容B", "manual", null, ["口语化"]);
+		const a = db.createPrompt(scenarioId, "提示A", "内容A", ["正式", "小红书"]);
+		const b = db.createPrompt(scenarioId, "提示B", "内容B", ["口语化"]);
 		promptA = a.id;
 		promptB = b.id;
 	});
@@ -257,7 +252,7 @@ describe("prompt tags", () => {
 	});
 
 	test("getAllPrompts filters by tag", () => {
-		const filtered = db.getAllPrompts("updated", { tag: "小红书" });
+		const filtered = db.getAllPrompts("updated", { tag: "小红书" }).items;
 		expect(filtered).toHaveLength(1);
 		expect(filtered[0].id).toBe(promptA);
 	});
@@ -305,7 +300,7 @@ describe("prompt tags", () => {
 describe("v2.1.1 audit fixes", () => {
 	test("searchAll returns prompt_count for scenarios", () => {
 		const s = db.createScenario("计数场景", "", []);
-		db.createPrompt(s.id, "计数提示词", "内容", "manual", null);
+		db.createPrompt(s.id, "计数提示词", "内容");
 		const r = db.searchAll("计数场景");
 		expect(r.scenarios).toHaveLength(1);
 		expect(r.scenarios[0].prompt_count).toBe(1);
@@ -313,7 +308,7 @@ describe("v2.1.1 audit fixes", () => {
 
 	test("setPromptTags dedupes case-insensitively", () => {
 		const s = db.createScenario("去重场景", "", []);
-		const p = db.createPrompt(s.id, "去重提示词", "内容", "manual", null, ["Alpha", "alpha", "Beta", "Beta"]);
+		const p = db.createPrompt(s.id, "去重提示词", "内容", ["Alpha", "alpha", "Beta", "Beta"]);
 		expect(db.getPrompt(p.id)!.tags).toEqual(["Alpha", "Beta"]);
 	});
 
@@ -352,6 +347,67 @@ describe("portable config resolution (外置 config.json)", () => {
 	test("blank or missing values fall through to default", () => {
 		expect(db.resolveDataDir({ dataDir: "   " }, { customDataDir: "  " }, fallback)).toBe(fallback);
 		expect(db.resolveDataDir(null, null, fallback)).toBe(fallback);
+	});
+});
+
+describe("large list robustness", () => {
+	test("tags load correctly beyond the 500-placeholder chunk boundary", () => {
+		const s = db.createScenario("分块场景", "", []);
+		for (let i = 1; i <= 520; i++) {
+			db.createPrompt(s.id, `分块提示词${i}`, "内容", ["分块标签"]);
+		}
+		const list = db.getPrompts(s.id);
+		expect(list.length).toBe(520);
+		// 标签批量加载按 500 条分块，跨块边界的每条提示词都必须拿到自己的标签
+		expect(list.every((p) => p.tags.length === 1 && p.tags[0] === "分块标签")).toBe(true);
+		const all = db.getAllPrompts("updated", { tag: "分块标签" }).items;
+		expect(all.length).toBe(520);
+	});
+});
+
+describe("pagination", () => {
+	test("limit/offset pages concatenate to the full list; total counts all matches", () => {
+		const s = db.createScenario("分页场景", "", []);
+		for (let i = 1; i <= 14; i++) {
+			db.createPrompt(s.id, `分页提示词${String(i).padStart(2, "0")}`, "内容", ["分页标签"]);
+		}
+		const { items: full, total } = db.getAllPrompts("updated", { tag: "分页标签" });
+		expect(total).toBe(14);
+		expect(full).toHaveLength(14);
+
+		// total 是筛选匹配总数，不受页大小影响
+		const page1 = db.getAllPrompts("updated", { tag: "分页标签", limit: 6, offset: 0 });
+		expect(page1.total).toBe(14);
+		expect(page1.items).toHaveLength(6);
+		// 排序带唯一 tiebreaker（id DESC）：跨请求分页顺序确定，与全量查询逐位一致
+		expect(page1.items).toEqual(full.slice(0, 6));
+
+		const page2 = db.getAllPrompts("updated", { tag: "分页标签", limit: 6, offset: 6 });
+		expect(page2.items).toEqual(full.slice(6, 12));
+
+		const page3 = db.getAllPrompts("updated", { tag: "分页标签", limit: 6, offset: 12 });
+		expect(page3.items).toEqual(full.slice(12, 14));
+
+		// 越界 offset：空页但 total 仍正确
+		const page4 = db.getAllPrompts("updated", { tag: "分页标签", limit: 6, offset: 18 });
+		expect(page4.items).toHaveLength(0);
+		expect(page4.total).toBe(14);
+
+		// 逐页拼接 = 全量集合（不重不漏）
+		const pagedIds = [...page1.items, ...page2.items, ...page3.items].map((p) => p.id).sort((a, b) => a - b);
+		expect(pagedIds).toEqual(full.map((p) => p.id).sort((a, b) => a - b));
+	});
+
+	test("total respects favorite filter with pagination", () => {
+		const s = db.createScenario("分页收藏场景", "", []);
+		const created = [1, 2, 3, 4, 5].map((i) => db.createPrompt(s.id, `收藏分页${i}`, "内容"));
+		db.togglePromptFavorite(created[0].id);
+		db.togglePromptFavorite(created[2].id);
+
+		const favPage = db.getAllPrompts("updated", { favorite: true, limit: 6, offset: 0 });
+		expect(favPage.total).toBe(2);
+		expect(favPage.items).toHaveLength(2);
+		expect(favPage.items.every((p) => p.is_favorite === 1)).toBe(true);
 	});
 });
 

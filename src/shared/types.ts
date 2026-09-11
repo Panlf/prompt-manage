@@ -21,8 +21,6 @@ export type Prompt = {
 	scenario_id: number;
 	title: string;
 	content: string;
-	source: string; // "ai" | "manual"
-	model_name: string | null;
 	is_favorite: number; // 0 | 1
 	use_count: number;
 	last_used_at: string | null;

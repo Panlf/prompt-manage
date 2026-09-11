@@ -1,4 +1,4 @@
-import { state, setRenderFn, navigate, loadAll, setMainContent, escapeHtml, type ViewName, windowMinimize, windowSetMaximized, windowSyncInputRegion, windowClose, windowGetPosition, windowSetPosition, getUiPref, setUiPref } from "./core";
+import { state, setRenderFn, navigate, loadAll, setMainContent, escapeHtml, type ViewName, isMacPlatform, windowMinimize, windowSetMaximized, windowSyncInputRegion, windowClose, windowGetPosition, windowSetPosition, getUiPref, setUiPref } from "./core";
 import { renderDashboard } from "./dashboard";
 import { renderScenarios } from "./scenarios";
 import { renderScenarioDetail, renderPromptDetail } from "./prompts";
@@ -228,14 +228,10 @@ function initSidebar() {
 
 	// Sidebar search hint opens the command palette
 	document.getElementById("sidebar-search-hint")?.addEventListener("click", () => openPalette());
-	if (isMac()) {
+	if (isMacPlatform()) {
 		const kbd = document.getElementById("sidebar-mod-key");
 		if (kbd) kbd.textContent = "⌘ K";
 	}
-}
-
-function isMac(): boolean {
-	return navigator.platform.toUpperCase().includes("MAC");
 }
 
 function updateSidebarActive() {
@@ -322,9 +318,21 @@ initCommandPalette();
 initTheme(); // 尽早恢复上次选择的配色（不阻塞首屏渲染）
 setRenderFn(renderWithTransition);
 setMainContent('<div class="empty-state">加载中...</div>');
-loadAll().then(() => {
-	// 启动即同步一次输入区域：窗口若以上次的最大化尺寸直接创建，
-	// 输入命中区域可能停留在初始配置尺寸（旧区域之外点击穿透）
-	windowSyncInputRegion().catch(() => {});
-	render();
-});
+loadAll()
+	.then(() => {
+		// 启动即同步一次输入区域：窗口若以上次的最大化尺寸直接创建，
+		// 输入命中区域可能停留在初始配置尺寸（旧区域之外点击穿透）
+		windowSyncInputRegion().catch(() => {});
+		render();
+	})
+	.catch((err) => {
+		// 启动加载失败（如数据库被占用/迁移中）：给出重试入口，而不是永远停在"加载中"
+		const msg = err instanceof Error ? err.message : String(err);
+		setMainContent(`
+			<div class="empty-state">
+				启动加载失败: ${escapeHtml(msg)}
+				<button class="btn-primary" id="retry-init-btn" style="margin-top:10px">重试</button>
+			</div>
+		`);
+		document.getElementById("retry-init-btn")?.addEventListener("click", () => location.reload());
+	});

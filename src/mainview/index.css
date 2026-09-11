@@ -860,6 +860,7 @@ h4 {
 
 .card-actions {
 	display: flex;
+	align-items: center;
 	gap: 6px;
 	flex-shrink: 0;
 }
@@ -893,6 +894,15 @@ h4 {
 	gap: 6px;
 	border: none;
 	background: transparent;
+}
+
+/* 全部提示词：底部懒加载进度指示（已显示 x / 总 y 条） */
+.list-footer {
+	min-height: 22px;
+	padding: 12px 0 26px;
+	text-align: center;
+	color: var(--text-tertiary);
+	font: var(--text-caption);
 }
 
 /* ---------- Scenarios Page ---------- */
@@ -1080,36 +1090,31 @@ h4 {
 	font-size: 12.5px;
 }
 
-.source-badge {
-	display: inline-flex;
-	align-items: center;
-	padding: 2px 8px;
-	font: var(--text-caption);
-	font-weight: 600;
-	border-radius: var(--radius-pill);
-	letter-spacing: 0.02em;
-}
-
-.source-ai {
-	background: var(--accent-soft);
-	color: var(--accent);
-}
-
-.source-manual {
-	background: var(--bg-secondary);
-	color: var(--text-secondary);
-}
-
 /* ---------- Prompt Detail Layout ---------- */
+/* 提示词编辑页：行堆叠布局——编辑+版本历史 / 变量+预检 / 预检结果，各行内部再分栏 */
 .prompt-detail-layout {
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+}
+
+.detail-row {
 	display: grid;
-	grid-template-columns: 1fr 340px;
 	gap: 24px;
 	align-items: start;
 }
 
+.detail-row-main {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 380px);
+}
+
+.detail-row-tools {
+	grid-template-columns: 1fr 1fr;
+}
+
 @media (max-width: 920px) {
-	.prompt-detail-layout {
+	.detail-row-main,
+	.detail-row-tools {
 		grid-template-columns: 1fr;
 	}
 }
@@ -1193,6 +1198,18 @@ h4 {
 	margin-bottom: 8px;
 	font: var(--text-caption);
 	color: var(--text-secondary);
+}
+
+.run-actions {
+	margin-left: auto;
+	display: flex;
+	gap: 6px;
+}
+
+.run-footer {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 8px;
 }
 
 .run-type-badge {
@@ -1294,7 +1311,8 @@ h4 {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
-	max-height: 380px;
+	/* 与左侧编辑器大致等高，超出滚动 */
+	max-height: 560px;
 	overflow-y: auto;
 }
 
@@ -1562,50 +1580,6 @@ select option {
 	font: var(--text-caption);
 	margin-top: 6px;
 	line-height: 1.5;
-}
-
-/* ---------- AI Section in Modal ---------- */
-.ai-section {
-	background: var(--bg-secondary);
-	border: 1px solid var(--border-soft);
-	border-radius: var(--radius-md);
-	padding: 16px 18px;
-	margin: 4px 0 18px;
-}
-
-.ai-section-title {
-	font: var(--text-label);
-	font-weight: 600;
-	color: var(--text-secondary);
-	margin-bottom: 12px;
-	letter-spacing: 0.02em;
-	text-transform: uppercase;
-	font-size: 11px;
-}
-
-.ai-section .form-row {
-	gap: 10px;
-	margin-bottom: 16px;
-}
-
-/* 行内字段去掉自带的下边距，行间距交给行本身控制 */
-.ai-section .form-row .form-group {
-	margin-bottom: 0;
-}
-
-/* AI生成按钮：单元格撑满整行高度，隐形标签占住标签行的位置，
-   按钮在剩余空间（正好是输入框的垂直区间）内拉伸到等高，实现垂直居中对齐；
-   宽度按内容自适应，不与输入框抢占行宽 */
-.ai-section .ai-generate-cell {
-	flex: 0 0 auto;
-	align-self: stretch;
-	display: flex;
-	flex-direction: column;
-}
-
-.ai-section .ai-generate-cell > button {
-	flex: 1;
-	min-width: 96px;
 }
 
 /* ---------- Modal ---------- */
@@ -2645,7 +2619,9 @@ select option {
 }
 
 .prompt-card-tags {
-	margin-bottom: 10px;
+	/* 与上（预览文本）下（使用次数行）留出对称间距 */
+	margin-top: 12px;
+	margin-bottom: 12px;
 }
 
 .prompt-card-tags .tag-mini {

@@ -238,7 +238,10 @@ export function validateDataDir(dir: string): { ok: boolean; message: string } {
 export function migrateDataDir(newDir: string): string {
 	const trimmed = newDir.trim();
 	if (!trimmed) throw new Error("新路径不能为空");
-	if (trimmed === dataDir) throw new Error("新路径与当前路径相同");
+	// Windows 路径不区分大小写（c:\data 与 C:\Data 是同一目录），避免"迁移到自己"误判
+	const samePath = (a: string, b: string) =>
+		process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+	if (samePath(trimmed, dataDir)) throw new Error("新路径与当前路径相同");
 
 	// 准备目标目录并预检可写——任何失败都给出友好提示，
 	// 且此时数据库连接从未被触碰，应用可继续正常使用
@@ -402,17 +405,23 @@ export function getPromptTags(promptId: number): string[] {
 function loadPromptTags(promptIds: number[]): Map<number, string[]> {
 	const result = new Map<number, string[]>();
 	if (promptIds.length === 0) return result;
-	const placeholders = promptIds.map(() => "?").join(",");
-	const rows = db.prepare(`
-		SELECT m.prompt_id, t.name FROM prompt_tag_map m
-		JOIN prompt_tags t ON t.id = m.tag_id
-		WHERE m.prompt_id IN (${placeholders})
-		ORDER BY t.name
-	`).all(...promptIds) as any[];
-	for (const r of rows) {
-		const list = result.get(r.prompt_id) ?? [];
-		list.push(r.name);
-		result.set(r.prompt_id, list);
+	// 分块查询：IN 占位符数量随提示词数量线性增长，分块防御 SQLite 变量数上限；
+	// 同一 prompt_id 只会落在一个块内，每条提示词的标签顺序不受影响
+	const CHUNK_SIZE = 500;
+	for (let i = 0; i < promptIds.length; i += CHUNK_SIZE) {
+		const chunk = promptIds.slice(i, i + CHUNK_SIZE);
+		const placeholders = chunk.map(() => "?").join(",");
+		const rows = db.prepare(`
+			SELECT m.prompt_id, t.name FROM prompt_tag_map m
+			JOIN prompt_tags t ON t.id = m.tag_id
+			WHERE m.prompt_id IN (${placeholders})
+			ORDER BY t.name
+		`).all(...chunk) as any[];
+		for (const r of rows) {
+			const list = result.get(r.prompt_id) ?? [];
+			list.push(r.name);
+			result.set(r.prompt_id, list);
+		}
 	}
 	return result;
 }
@@ -463,8 +472,10 @@ export function getPrompt(id: number): Prompt | null {
 	return { ...row, tags: getPromptTags(id) };
 }
 
-export function createPrompt(scenarioId: number, title: string, content: string, source: string, modelName: string | null, tags?: string[]): Prompt {
-	const row = db.prepare("INSERT INTO prompts (scenario_id, title, content, source, model_name) VALUES (?, ?, ?, ?, ?) RETURNING *").get(scenarioId, title, content, source, modelName) as any;
+export function createPrompt(scenarioId: number, title: string, content: string, tags?: string[]): Prompt {
+	title = title.trim();
+	if (!title) throw new Error("标题不能为空");
+	const row = db.prepare("INSERT INTO prompts (scenario_id, title, content) VALUES (?, ?, ?) RETURNING *").get(scenarioId, title, content) as any;
 	if (tags) setPromptTags(row.id, tags);
 	// Update scenario updated_at
 	db.prepare("UPDATE scenarios SET updated_at = datetime('now') WHERE id = ?").run(scenarioId);
@@ -472,6 +483,8 @@ export function createPrompt(scenarioId: number, title: string, content: string,
 }
 
 export function updatePrompt(id: number, title: string, content: string, tags?: string[]): Prompt {
+	title = title.trim();
+	if (!title) throw new Error("标题不能为空");
 	const tx = db.transaction(() => {
 		// Save current version before updating
 		const current = db.prepare("SELECT * FROM prompts WHERE id = ?").get(id) as any;
@@ -557,26 +570,24 @@ export function getFavoritePrompts(): PromptWithScenario[] {
 
 // 全部提示词页三个 Tab 的取数规则：每个 Tab 固定只取前 6 条；
 // 最近使用/最常用只统计复制过的提示词，没复制过的不进入这两个 Tab
+// 排序规则均以 id DESC 收尾：updated_at 等字段存在同秒并列，
+// 显式唯一 tiebreaker 保证分页（LIMIT/OFFSET）跨请求顺序稳定，不重不漏
 const SORT_RULES: Record<PromptSort, { where?: string; order: string }> = {
-	recent: { where: "p.last_used_at IS NOT NULL", order: "p.last_used_at DESC, p.updated_at DESC" },
-	most_used: { where: "p.use_count > 0", order: "p.use_count DESC, p.last_used_at DESC, p.updated_at DESC" },
-	updated: { order: "p.updated_at DESC" },
+	recent: { where: "p.last_used_at IS NOT NULL", order: "p.last_used_at DESC, p.updated_at DESC, p.id DESC" },
+	most_used: { where: "p.use_count > 0", order: "p.use_count DESC, p.last_used_at DESC, p.updated_at DESC, p.id DESC" },
+	updated: { order: "p.updated_at DESC, p.id DESC" },
 };
 
 export function getAllPrompts(
 	sort: PromptSort,
-	opts?: { favorite?: boolean; source?: string; tag?: string },
-): PromptWithScenario[] {
+	opts?: { favorite?: boolean; tag?: string; limit?: number; offset?: number },
+): { items: PromptWithScenario[]; total: number } {
 	const rules = SORT_RULES[sort] ?? SORT_RULES.updated;
 	const conditions = ["p.deleted_at IS NULL"];
 	if (rules.where) conditions.push(rules.where);
 	const params: any[] = [];
 	if (opts?.favorite) {
 		conditions.push("p.is_favorite = 1");
-	}
-	if (opts?.source) {
-		conditions.push("p.source = ?");
-		params.push(opts.source);
 	}
 	if (opts?.tag) {
 		conditions.push(`
@@ -587,16 +598,25 @@ export function getAllPrompts(
 		`);
 		params.push(opts.tag);
 	}
-	const sql = `
+	const whereSql = `WHERE ${conditions.join(" AND ")}`;
+
+	// total = 当前筛选条件下匹配的总条数（与是否分页无关），供页头计数展示
+	const total = (db.prepare(`SELECT COUNT(*) as c FROM prompts p ${whereSql}`).get(...params) as any).c;
+
+	const listSql = `
 		SELECT p.*, s.name as scenario_name
 		FROM prompts p JOIN scenarios s ON s.id = p.scenario_id
-		WHERE ${conditions.join(" AND ")}
+		${whereSql}
 		ORDER BY ${rules.order}
-		LIMIT 6
 	`;
-	const rows = db.prepare(sql).all(...params) as any[];
+	// limit 缺省 = 全量（保持旧行为）；传入 limit/offset = 分页查询
+	const rows = (
+		opts?.limit !== undefined
+			? db.prepare(`${listSql} LIMIT ? OFFSET ?`).all(...params, Math.max(0, opts.limit), Math.max(0, opts.offset ?? 0))
+			: db.prepare(listSql).all(...params)
+	) as any[];
 	const tags = loadPromptTags(rows.map((r) => r.id));
-	return rows.map((r) => ({ ...r, tags: tags.get(r.id) ?? [] }));
+	return { items: rows.map((r) => ({ ...r, tags: tags.get(r.id) ?? [] })), total };
 }
 
 export function getRecentPrompts(limit: number): PromptWithScenario[] {
@@ -689,6 +709,18 @@ export function savePromptVersion(promptId: number, content: string, note: strin
 	return db.prepare("INSERT INTO prompt_versions (prompt_id, version_number, content, note) VALUES (?, ?, ?, ?) RETURNING *").get(promptId, nextVersion, content, note) as PromptVersion;
 }
 
+/** 删除一个历史版本，并把剩余版本按原顺序紧凑重编号（v1,v2,v3 删 v2 → v1,v2），避免版本号出现空洞。 */
+export function deletePromptVersion(id: number): void {
+	const v = db.prepare("SELECT prompt_id FROM prompt_versions WHERE id = ?").get(id) as { prompt_id: number } | null;
+	if (!v) throw new Error("Version not found");
+	db.transaction(() => {
+		db.prepare("DELETE FROM prompt_versions WHERE id = ?").run(id);
+		const rows = db.prepare("SELECT id FROM prompt_versions WHERE prompt_id = ? ORDER BY version_number ASC").all(v.prompt_id) as { id: number }[];
+		const renumber = db.prepare("UPDATE prompt_versions SET version_number = ? WHERE id = ?");
+		rows.forEach((row, i) => renumber.run(i + 1, row.id));
+	})();
+}
+
 // ---- Precheck queries ----
 
 export function getPrecheckRuns(promptId: number): PrecheckRun[] {
@@ -777,6 +809,20 @@ export function importData(json: string): void {
 	if (!data || !Array.isArray(data.scenarios) || !Array.isArray(data.prompts)) {
 		throw new Error("备份文件格式不正确：缺少 scenarios 或 prompts 数据");
 	}
+	// 预编译全部插入语句（循环外 prepare 一次），大数据量导入时避免逐行重复编译
+	const insertScenario = db.prepare("INSERT INTO scenarios (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)");
+	const insertTag = db.prepare("INSERT INTO tags (id, name, created_at) VALUES (?, ?, ?)");
+	const insertScenarioTag = db.prepare("INSERT INTO scenario_tags (scenario_id, tag_id) VALUES (?, ?)");
+	const insertLLMConfig = db.prepare("INSERT INTO llm_configs (id, name, provider, api_key, base_url, model, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+	const insertPrompt = db.prepare(
+		`INSERT INTO prompts (id, scenario_id, title, content, is_favorite, use_count, last_used_at, deleted_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	);
+	const insertVersion = db.prepare("INSERT INTO prompt_versions (id, prompt_id, version_number, content, note, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+	const insertPrecheckRun = db.prepare("INSERT INTO precheck_runs (id, prompt_id, type, input_text, output_text, model_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+	const insertPromptTag = db.prepare("INSERT INTO prompt_tags (id, name, created_at) VALUES (?, ?, ?)");
+	const insertPromptTagMap = db.prepare("INSERT INTO prompt_tag_map (prompt_id, tag_id) VALUES (?, ?)");
+
 	db.transaction(() => {
 		// 不要在此事务内切换 PRAGMA foreign_keys（SQLite 中事务内是 no-op）。
 		// 下面的插入顺序已按依赖排列（先父表后子表），外键开启状态下即可安全导入；
@@ -795,29 +841,25 @@ export function importData(json: string): void {
 		db.exec("DELETE FROM sqlite_sequence");
 
 		for (const s of data.scenarios) {
-			db.prepare("INSERT INTO scenarios (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(s.id, s.name, s.description, s.created_at, s.updated_at);
+			insertScenario.run(s.id, s.name, s.description, s.created_at, s.updated_at);
 		}
 		for (const t of data.tags ?? []) {
-			db.prepare("INSERT INTO tags (id, name, created_at) VALUES (?, ?, ?)").run(t.id, t.name, t.created_at);
+			insertTag.run(t.id, t.name, t.created_at);
 		}
 		for (const st of data.scenario_tags ?? []) {
-			db.prepare("INSERT INTO scenario_tags (scenario_id, tag_id) VALUES (?, ?)").run(st.scenario_id, st.tag_id);
+			insertScenarioTag.run(st.scenario_id, st.tag_id);
 		}
 		for (const c of data.llm_configs ?? []) {
-			db.prepare("INSERT INTO llm_configs (id, name, provider, api_key, base_url, model, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(c.id, c.name, c.provider, c.api_key ?? "", c.base_url, c.model, c.is_active, c.created_at);
+			insertLLMConfig.run(c.id, c.name, c.provider, c.api_key ?? "", c.base_url, c.model, c.is_active, c.created_at);
 		}
 		for (const p of data.prompts as ImportablePrompt[]) {
-			// v2 columns are optional so v1 backups still import
-			db.prepare(
-				`INSERT INTO prompts (id, scenario_id, title, content, source, model_name, is_favorite, use_count, last_used_at, deleted_at, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(
+			// v2 columns are optional so v1 backups still import;
+			// 旧备份里的 source / model_name 字段直接忽略（列保留默认值）
+			insertPrompt.run(
 				p.id,
 				p.scenario_id,
 				p.title,
 				p.content,
-				p.source ?? "manual",
-				p.model_name ?? null,
 				p.is_favorite ?? 0,
 				p.use_count ?? 0,
 				p.last_used_at ?? null,
@@ -827,17 +869,17 @@ export function importData(json: string): void {
 			);
 		}
 		for (const v of data.prompt_versions ?? []) {
-			db.prepare("INSERT INTO prompt_versions (id, prompt_id, version_number, content, note, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(v.id, v.prompt_id, v.version_number, v.content, v.note, v.created_at);
+			insertVersion.run(v.id, v.prompt_id, v.version_number, v.content, v.note, v.created_at);
 		}
 		for (const r of data.precheck_runs ?? []) {
-			db.prepare("INSERT INTO precheck_runs (id, prompt_id, type, input_text, output_text, model_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(r.id, r.prompt_id, r.type, r.input_text, r.output_text, r.model_name, r.created_at);
+			insertPrecheckRun.run(r.id, r.prompt_id, r.type, r.input_text, r.output_text, r.model_name, r.created_at);
 		}
 		// v2.1 additions: prompt-level tags (optional so older backups still import)
 		for (const t of data.prompt_tags ?? []) {
-			db.prepare("INSERT INTO prompt_tags (id, name, created_at) VALUES (?, ?, ?)").run(t.id, t.name, t.created_at);
+			insertPromptTag.run(t.id, t.name, t.created_at);
 		}
 		for (const m of data.prompt_tag_map ?? []) {
-			db.prepare("INSERT INTO prompt_tag_map (prompt_id, tag_id) VALUES (?, ?)").run(m.prompt_id, m.tag_id);
+			insertPromptTagMap.run(m.prompt_id, m.tag_id);
 		}
 	})();
 }

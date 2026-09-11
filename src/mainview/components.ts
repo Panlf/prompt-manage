@@ -39,7 +39,17 @@ export function bindCopyButtons(root: ParentNode) {
 		btn.addEventListener("click", async (e) => {
 			e.stopPropagation();
 			const id = parseInt(btn.dataset["copyPrompt"]!);
-			const content = promptContentCache.get(id) ?? btn.dataset["content"] ?? "";
+			// 内容缓存有 500 条上限（超限整体清空），未命中时回源拉取，避免静默复制空内容
+			let content = promptContentCache.get(id) ?? btn.dataset["content"] ?? "";
+			if (!content) {
+				try {
+					const p = await rpc().request.getPrompt({ id });
+					content = p.content;
+					cachePromptContent(p);
+				} catch {
+					// 回源失败仍尝试复制已拿到的内容
+				}
+			}
 			const ok = await copyPromptAndRecord({ id, content });
 			if (!ok) {
 				showToast("复制失败，请重试", "error");
@@ -81,6 +91,8 @@ export function bindFavoriteStars(root: ParentNode, refresh = true) {
 					}
 				});
 				showToast(updated.is_favorite ? "已收藏" : "已取消收藏", "success");
+				// 广播收藏状态变化（如"全部提示词"页的"仅收藏"筛选需要刷新列表）
+				document.dispatchEvent(new CustomEvent("prompt-favorite-changed", { detail: { id } }));
 				if (refresh) {
 					// Favorites/all-prompts views need list refresh (item may leave the list)
 					if (state.view === "favorites") rerender();
@@ -114,7 +126,6 @@ export function promptRowHtml(p: PromptWithScenario, opts?: { showFavorite?: boo
 					<div class="prompt-row-title">
 						<span class="prompt-row-name">${escapeHtml(p.title)}</span>
 						${varCount > 0 ? `<span class="var-badge" title="包含 ${varCount} 个变量">${ICONS.variable}${varCount}</span>` : ""}
-						${p.source === "ai" ? '<span class="source-badge source-ai">AI</span>' : ""}
 						${tagsHtml}
 					</div>
 					<p class="prompt-row-preview">${escapeHtml(preview)}</p>
@@ -122,7 +133,7 @@ export function promptRowHtml(p: PromptWithScenario, opts?: { showFavorite?: boo
 			</div>
 			<div class="prompt-row-side">
 				${showScenario ? `<span class="prompt-row-scenario">${escapeHtml(p.scenario_name)}</span>` : ""}
-				${showUses ? `<span class="prompt-row-uses">${p.use_count > 0 ? `↑ ${p.use_count} 次` : "未使用"}</span>` : ""}
+				${showUses ? `<span class="prompt-row-uses">${p.use_count > 0 ? `${p.use_count} 次` : "未使用"}</span>` : ""}
 				<span class="prompt-row-date">${formatDate(p.last_used_at || p.updated_at)}</span>
 				<button class="copy-chip" data-copy-prompt="${p.id}" title="复制提示词">
 					<span class="copy-icon">${ICONS.copy}</span>
@@ -162,7 +173,6 @@ export function promptCardHtml(p: Prompt): string {
 				<h3 class="card-title">
 					<button class="fav-star${p.is_favorite ? " active" : ""}" data-fav-prompt="${p.id}" title="${p.is_favorite ? "取消收藏" : "收藏"}">${ICONS.star(!!p.is_favorite)}</button>
 					${escapeHtml(p.title)}
-					${p.source === "ai" ? '<span class="source-badge source-ai">AI</span>' : '<span class="source-badge source-manual">手动</span>'}
 					${varCount > 0 ? `<span class="var-badge" title="包含 ${varCount} 个变量">${ICONS.variable}${varCount}</span>` : ""}
 				</h3>
 				<div class="card-actions">
@@ -176,7 +186,6 @@ export function promptCardHtml(p: Prompt): string {
 			<p class="prompt-preview">${escapeHtml(p.content)}</p>
 			${tagsHtml}
 			<div class="prompt-card-meta">
-				${p.model_name ? `<span class="card-meta">模型: ${escapeHtml(p.model_name)}</span>` : ""}
 				<span class="card-meta">${p.use_count > 0 ? `已使用 ${p.use_count} 次` : "未使用"}</span>
 				${p.last_used_at ? `<span class="card-meta">最近使用 ${formatDate(p.last_used_at)}</span>` : ""}
 			</div>

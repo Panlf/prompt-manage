@@ -10,12 +10,32 @@ const SORT_LABELS: { key: PromptSort; label: string }[] = [
 
 // Toolbar state, persisted across page entries
 let lastSort: PromptSort = "updated";
-let lastSource = "";
 let lastTag = "";
 let lastFavorite = false;
-// Incremented on every toolbar change / page exit; stale async list refreshes
-// are dropped by comparing tokens (prevents flicker from out-of-order responses)
+// Incremented on every toolbar change / page exit; stale async loads
+// are dropped by comparing tokens (prevents flicker / wrong-page appends)
 let refreshToken = 0;
+
+// ---- 懒加载分页：首屏 PAGE_SIZE 条，滚动接近底部自动续载 ----
+const PAGE_SIZE = 6;
+// 触底阈值：距滚动容器底部不足该距离时续载
+const LOAD_MORE_THRESHOLD = 60;
+// 两次续载之间的冷却：同一滚动手势/惯性内不连续翻页（一次滚动 ≈ 一页）
+const LOAD_COOLDOWN_MS = 500;
+// 当前筛选条件下已加载的条目（滚动追加；筛选/排序变化时重置）
+let pageItems: PromptWithScenario[] = [];
+// 当前筛选条件下匹配的总条数（页头计数展示，与已加载条数无关）
+let totalCount = 0;
+// 当前在途加载的 token；null = 无在途加载（防止滚动重复触发）
+let activeLoad: number | null = null;
+// 冷却截止时间：续载后短时间内忽略再次触发
+let cooldownUntil = 0;
+
+// 收藏状态变化时，若"仅收藏"筛选开启则重载列表（取消收藏的行需要移出列表，
+// 新收藏的行需要按当前排序进入列表）。事件由 components.ts 的收藏星广播。
+document.addEventListener("prompt-favorite-changed", () => {
+	if (state.view === "all-prompts" && lastFavorite) loadPage(0, false);
+});
 
 async function loadPromptTags(): Promise<Tag[]> {
 	try {
@@ -32,6 +52,9 @@ async function loadPromptTags(): Promise<Tag[]> {
  */
 export async function renderAllPrompts() {
 	refreshToken++;
+	pageItems = [];
+	totalCount = 0;
+	disconnectListObserver();
 	const promptTags = await loadPromptTags();
 	if (state.view !== "all-prompts") return; // user navigated away while loading
 
@@ -44,10 +67,7 @@ export async function renderAllPrompts() {
 			<div class="segmented" id="sort-seg">
 				${SORT_LABELS.map((s) => `<button class="seg-btn${lastSort === s.key ? " active" : ""}" data-sort="${s.key}">${s.label}</button>`).join("")}
 			</div>
-			<div class="filter-pills" id="source-pills">
-				<button class="tag-pill${lastSource === "" ? " active" : ""}" data-source="">全部来源</button>
-				<button class="tag-pill${lastSource === "ai" ? " active" : ""}" data-source="ai">AI 生成</button>
-				<button class="tag-pill${lastSource === "manual" ? " active" : ""}" data-source="manual">手动</button>
+			<div class="filter-pills">
 				<button class="tag-pill${lastFavorite ? " active" : ""}" id="fav-filter" title="只显示收藏的提示词">⭐ 仅收藏</button>
 			</div>
 		</div>
@@ -67,43 +87,139 @@ export async function renderAllPrompts() {
 		<div class="prompt-row-list card" id="all-prompt-list">
 			<div class="empty-state" style="border:none;background:transparent">加载中…</div>
 		</div>
+		<div class="list-footer" id="list-footer"></div>
 	`);
 
 	bindToolbar();
-	await refreshList();
+	setupListObserver();
+	await loadPage(0, false);
 }
 
-/** Fetch the list with current toolbar state and swap it in (list region only). */
-async function refreshList() {
+/**
+ * Load one page (自 offset 起 PAGE_SIZE 条) with current toolbar state.
+ * append=false：替换整个列表（进入页面/筛选排序变化）；append=true：滚动追加。
+ * 页头计数始终展示 totalCount（筛选匹配总条数），与已加载条数无关。
+ */
+async function loadPage(offset: number, append: boolean) {
 	const token = ++refreshToken;
+	activeLoad = token;
+	const footer = document.getElementById("list-footer");
+	if (footer) footer.textContent = "加载中…";
 	const listEl = document.getElementById("all-prompt-list");
-	if (!listEl) return; // user already navigated away
-	listEl.classList.add("refreshing");
+	if (!append && listEl) listEl.classList.add("refreshing");
 
-	let prompts: PromptWithScenario[] = [];
+	let res: { items: PromptWithScenario[]; total: number };
 	try {
-		prompts = await rpc().request.getAllPrompts({
+		res = await rpc().request.getAllPrompts({
 			sort: lastSort,
 			favorite: lastFavorite || undefined,
-			source: lastSource || undefined,
 			tag: lastTag || undefined,
+			limit: PAGE_SIZE,
+			offset,
 		});
 	} catch (err) {
+		if (token !== refreshToken) return; // superseded
+		activeLoad = null;
+		if (footer) footer.textContent = "加载失败，2 秒后自动重试";
 		showToast("加载失败: " + (err instanceof Error ? err.message : String(err)), "error");
+		// 延迟自动重试同一页：仍在当前视图且筛选/页面未变时才重试
+		// （持续失败则每 2s 重试一次；筛选切换/离开页面即放弃）
+		setTimeout(() => {
+			if (state.view !== "all-prompts") return;
+			if (token !== refreshToken) return; // 筛选或页面已变化
+			if (activeLoad === null && nearBottom()) void loadPage(offset, append);
+		}, 2000);
+		return;
 	}
-	if (token !== refreshToken) return; // a newer refresh superseded this one
+	if (token !== refreshToken) return; // a newer load superseded this one
 
-	listEl.innerHTML =
-		prompts.length > 0
-			? prompts.map((p) => promptRowHtml(p)).join("")
-			: `<div class="empty-state" style="border:none;background:transparent">没有符合条件的提示词</div>`;
-	bindPromptRows(listEl, "all-prompts");
+	totalCount = res.total;
+	pageItems = append ? pageItems.concat(res.items) : res.items;
+
+	const list = document.getElementById("all-prompt-list");
+	if (!list) return; // user already navigated away
+
+	if (append) {
+		if (res.items.length > 0) {
+			// 在临时容器内完成事件绑定后再搬入列表，避免对既有行重复绑定
+			const temp = document.createElement("div");
+			temp.innerHTML = res.items.map((p) => promptRowHtml(p)).join("");
+			bindPromptRows(temp, "all-prompts");
+			list.querySelector(".empty-state")?.remove();
+			while (temp.firstChild) list.appendChild(temp.firstChild);
+		}
+	} else {
+		list.innerHTML =
+			pageItems.length > 0
+				? pageItems.map((p) => promptRowHtml(p)).join("")
+				: `<div class="empty-state" style="border:none;background:transparent">没有符合条件的提示词</div>`;
+		bindPromptRows(list, "all-prompts");
+		// Let the fade-in transition start from the dimmed state
+		requestAnimationFrame(() => list.classList.remove("refreshing"));
+	}
 
 	const countEl = document.getElementById("all-count");
-	if (countEl) countEl.textContent = `${prompts.length} 条`;
+	if (countEl) countEl.textContent = `${totalCount} 条`;
 
-	// Let the fade-in transition start from the dimmed state
-	requestAnimationFrame(() => listEl.classList.remove("refreshing"));
+	if (footer) {
+		footer.textContent =
+			totalCount === 0
+				? ""
+				: pageItems.length >= totalCount
+					? "已全部加载"
+					: `已显示 ${pageItems.length} / ${totalCount} 条，继续滚动加载更多`;
+	}
+	activeLoad = null;
+	// 不做自动补齐：是否续载完全由用户的滚动/滚轮动作驱动（onRootScroll / onRootWheel）
+}
+
+function maybeLoadMore() {
+	if (activeLoad !== null) return; // 已有在途加载
+	if (Date.now() < cooldownUntil) return; // 冷却期内：一次滚动手势只翻一页
+	if (state.view !== "all-prompts") return;
+	if (pageItems.length >= totalCount) return; // 已全部加载
+	if (!nearBottom()) return;
+	cooldownUntil = Date.now() + LOAD_COOLDOWN_MS;
+	void loadPage(pageItems.length, true);
+}
+
+function scrollRoot(): HTMLElement | null {
+	return document.getElementById("main-content");
+}
+
+/** 是否接近底部（不足一屏时距离恒 ≤ 0，同样视为"到底"） */
+function nearBottom(): boolean {
+	const root = scrollRoot();
+	if (!root) return false;
+	return root.scrollHeight - root.scrollTop - root.clientHeight < LOAD_MORE_THRESHOLD;
+}
+
+function onRootScroll() {
+	maybeLoadMore();
+}
+
+function onRootWheel(e: WheelEvent) {
+	const root = scrollRoot();
+	if (!root || e.deltaY <= 0) return; // 只有向下滚表示"想看更多"
+	// 内容不足一屏时没有滚动条、不会产生 scroll 事件：用滚轮向下触发加载下一页
+	// （冷却由 maybeLoadMore 统一控制）
+	if (root.scrollHeight > root.clientHeight) return;
+	maybeLoadMore();
+}
+
+function setupListObserver() {
+	disconnectListObserver();
+	const root = scrollRoot();
+	if (!root) return;
+	root.addEventListener("scroll", onRootScroll, { passive: true });
+	root.addEventListener("wheel", onRootWheel, { passive: true });
+	window.addEventListener("resize", onRootScroll);
+}
+
+function disconnectListObserver() {
+	scrollRoot()?.removeEventListener("scroll", onRootScroll);
+	scrollRoot()?.removeEventListener("wheel", onRootWheel);
+	window.removeEventListener("resize", onRootScroll);
 }
 
 /** Wire the toolbar: toggles update state in place, then refresh only the list. */
@@ -113,16 +229,7 @@ function bindToolbar() {
 			if (lastSort === btn.dataset["sort"]) return;
 			lastSort = btn.dataset["sort"] as PromptSort;
 			document.querySelectorAll("#sort-seg .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
-			refreshList();
-		});
-	});
-	document.querySelectorAll<HTMLButtonElement>("#source-pills .tag-pill").forEach((btn) => {
-		btn.addEventListener("click", () => {
-			const value = btn.dataset["source"] || "";
-			if (lastSource === value) return;
-			lastSource = value;
-			document.querySelectorAll("#source-pills .tag-pill").forEach((b) => b.classList.toggle("active", b === btn));
-			refreshList();
+			loadPage(0, false);
 		});
 	});
 	document.querySelectorAll<HTMLButtonElement>("#tag-pills .tag-pill").forEach((btn) => {
@@ -131,13 +238,13 @@ function bindToolbar() {
 			if (lastTag === value) return;
 			lastTag = value;
 			document.querySelectorAll("#tag-pills .tag-pill").forEach((b) => b.classList.toggle("active", b === btn));
-			refreshList();
+			loadPage(0, false);
 		});
 	});
 	document.getElementById("fav-filter")?.addEventListener("click", () => {
 		lastFavorite = !lastFavorite;
 		document.getElementById("fav-filter")?.classList.toggle("active", lastFavorite);
-		refreshList();
+		loadPage(0, false);
 	});
 }
 

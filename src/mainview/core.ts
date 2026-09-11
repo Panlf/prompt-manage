@@ -18,7 +18,7 @@ type AppRPC = {
 
 			getPrompts: { params: { scenario_id: number }; response: Prompt[] };
 			getPrompt: { params: { id: number }; response: Prompt };
-			createPrompt: { params: { scenario_id: number; title: string; content: string; source: string; model_name?: string; tags?: string[] }; response: Prompt };
+			createPrompt: { params: { scenario_id: number; title: string; content: string; tags?: string[] }; response: Prompt };
 			updatePrompt: { params: { id: number; title: string; content: string; tags?: string[] }; response: Prompt };
 			trashPrompt: { params: { id: number }; response: { success: boolean } };
 			restorePrompt: { params: { id: number }; response: Prompt };
@@ -31,7 +31,7 @@ type AppRPC = {
 			togglePromptFavorite: { params: { id: number }; response: Prompt };
 			recordPromptUse: { params: { id: number }; response: { success: boolean } };
 			getFavoritePrompts: { params: {}; response: PromptWithScenario[] };
-			getAllPrompts: { params: { sort: string; favorite?: boolean; source?: string; tag?: string }; response: PromptWithScenario[] };
+			getAllPrompts: { params: { sort: string; favorite?: boolean; tag?: string; limit?: number; offset?: number }; response: { items: PromptWithScenario[]; total: number } };
 			getRecentPrompts: { params: { limit: number }; response: PromptWithScenario[] };
 
 			getDashboardStats: { params: {}; response: DashboardStats };
@@ -39,11 +39,10 @@ type AppRPC = {
 
 			getPromptVersions: { params: { prompt_id: number }; response: PromptVersion[] };
 			savePromptVersion: { params: { prompt_id: number; content: string; note: string }; response: PromptVersion };
+			deletePromptVersion: { params: { id: number }; response: { success: boolean } };
 
 			getPrecheckRuns: { params: { prompt_id: number }; response: PrecheckRun[] };
-			runPrecheck: { params: { prompt_id: number; type: string; input_text: string; llm_config_id: number }; response: PrecheckRun };
-
-			generatePromptAI: { params: { scenario_name: string; description: string; llm_config_id: number }; response: { content: string } };
+			runPrecheck: { params: { prompt_id: number; type: string; input_text: string; llm_config_id: number; content?: string }; response: PrecheckRun };
 
 			getLLMConfigs: { params: {}; response: LLMConfig[] };
 			createLLMConfig: { params: { name: string; provider: string; api_key: string; base_url: string; model: string }; response: LLMConfig };
@@ -117,7 +116,7 @@ export const state = {
 // 仅在保存成功或切换页面时清空（见 navigate / openPrompt）。
 export const drafts: {
 	scenario: { name: string; description: string; tags: string } | null;
-	prompt: { title: string; tags: string; content: string; aiDesc: string } | null;
+	prompt: { title: string; tags: string; content: string } | null;
 } = { scenario: null, prompt: null };
 
 function clearDrafts() {
@@ -188,6 +187,13 @@ export function escapeRegExp(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** macOS 判定：优先 userAgentData（新标准），回退已弃用但仍兼容的 navigator.platform。 */
+export function isMacPlatform(): boolean {
+	const uaData = (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData;
+	const platform = (uaData?.platform ?? navigator.platform).toUpperCase();
+	return platform.includes("MAC");
+}
+
 /** Highlight all case-insensitive occurrences of `query` inside `text` with <mark>. */
 export function highlightHtml(text: string, query: string): string {
 	const escaped = escapeHtml(text);
@@ -202,6 +208,8 @@ export function formatDate(str: string | null): string {
 	if (!str) return "";
 	try {
 		const d = new Date(str + "Z");
+		// Invalid Date 不抛错而是返回自身：显式检查，避免界面出现 "Invalid Date"
+		if (isNaN(d.getTime())) return str;
 		return d.toLocaleString("zh-CN", {
 			month: "2-digit",
 			day: "2-digit",
